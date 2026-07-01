@@ -1,0 +1,21 @@
+[package]
+name = "my-copilot-desktop"
+version = "0.1.0"
+description = "A local-first coding agent desktop application"
+edition = "2021"
+
+[lib]
+name = "my_copilot_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+# time 0.3.52 changed a parsing API still used by cookie 0.18.1.
+time = "=0.3.51"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

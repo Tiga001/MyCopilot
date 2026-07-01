@@ -1,0 +1,13 @@
+{
+  "name": "my-copilot",
+  "private": true,
+  "scripts": {
+    "dev:desktop": "pnpm --filter desktop dev",
+    "dev:agent": "cd python-agent && uv run uvicorn src.main:app --reload --port 8000",
+    "dev": "pnpm dev:desktop",
+    "dev:full": "concurrently \"pnpm dev:agent\" \"pnpm dev:desktop\""
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0"
+  }
+}
