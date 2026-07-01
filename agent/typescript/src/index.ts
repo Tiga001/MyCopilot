@@ -5,6 +5,7 @@ export type {
   AgentCommandInvoker,
   AgentGitDiffSnapshot,
   AgentPatchExecutionResult,
+  AgentStartChatOutput,
   PendingAgentActionSnapshot,
 } from "./tauriBridge";
 export type {
@@ -37,9 +38,11 @@ export type {
   AgentWorkspaceContext,
 } from "./protocol";
 export {
+  AGENT_EVENT_NAME,
   approveAgentActionWithInvoker,
   cancelAgentActionWithInvoker,
   listPendingAgentActionsWithInvoker,
   rejectAgentActionWithInvoker,
   sendAgentChatWithInvoker,
+  startAgentChatWithInvoker,
 } from "./tauriBridge";

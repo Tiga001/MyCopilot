@@ -45,28 +45,24 @@ impl AgentActionState {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         for action in &output.proposed_actions {
-            let Some(action_id) = action_id(action) else {
-                continue;
-            };
-            let action_type = action_type(action).to_string();
             let tool_name = tool_calls
-                .get(action_id)
+                .get(action_id(action).unwrap_or_default())
                 .map(|call| call.tool.clone())
                 .unwrap_or_else(|| fallback_tool_name(action));
-
-            pending.insert(
-                action_id.to_string(),
-                PendingAgentAction {
-                    action_id: action_id.to_string(),
-                    action_type,
-                    tool_name,
-                    run_id: output.run_id.clone(),
-                    input: input.clone(),
-                    action: action.clone(),
-                    created_at: now_ms(),
-                },
-            );
+            insert_pending_action(&mut pending, input, &output.run_id, action, Some(tool_name));
         }
+    }
+
+    pub fn store_action(
+        &self,
+        input: &AgentChatInput,
+        run_id: &str,
+        action: &AgentProposedAction,
+        tool_name: Option<String>,
+    ) -> Result<(), String> {
+        let mut pending = self.pending()?;
+        insert_pending_action(&mut pending, input, run_id, action, tool_name);
+        Ok(())
     }
 
     pub fn take(&self, action_id: &str) -> Result<PendingAgentAction, String> {
@@ -98,6 +94,35 @@ impl AgentActionState {
             .lock()
             .map_err(|_| "agent pending action 状态不可用。".to_string())
     }
+}
+
+fn insert_pending_action(
+    pending: &mut HashMap<String, PendingAgentAction>,
+    input: &AgentChatInput,
+    run_id: &str,
+    action: &AgentProposedAction,
+    tool_name: Option<String>,
+) {
+    let Some(action_id) = action_id(action) else {
+        return;
+    };
+    let created_at = pending
+        .get(action_id)
+        .map(|action| action.created_at)
+        .unwrap_or_else(now_ms);
+
+    pending.insert(
+        action_id.to_string(),
+        PendingAgentAction {
+            action_id: action_id.to_string(),
+            action_type: action_type(action).to_string(),
+            tool_name: tool_name.unwrap_or_else(|| fallback_tool_name(action)),
+            run_id: run_id.to_string(),
+            input: input.clone(),
+            action: action.clone(),
+            created_at,
+        },
+    );
 }
 
 fn tool_calls_by_id(output: &AgentChatOutput) -> HashMap<String, AgentToolCall> {

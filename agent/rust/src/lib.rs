@@ -11,4 +11,4 @@ pub use protocol::{
     AgentSearchConfig, AgentSearchMode, AgentStateSnapshot, AgentToolCall, AgentToolDefinition,
     AgentToolResult, AgentToolSafety, AgentUsage, AgentWorkspaceContext,
 };
-pub use runtime::{send_chat, AgentRuntime};
+pub use runtime::{next_run_id, send_chat, send_chat_with_events, AgentEventEmitter, AgentRuntime};

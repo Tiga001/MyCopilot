@@ -11,6 +11,7 @@ use crate::tools::{ToolExecutionContext, ToolRegistry};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const DEFAULT_MAX_TOKENS: u32 = 1024;
@@ -20,8 +21,24 @@ const MAX_TOOL_ITERATIONS: usize = 4;
 
 static RUN_COUNTER: AtomicU64 = AtomicU64::new(1);
 
+pub type AgentEventEmitter = Arc<dyn Fn(AgentEvent) + Send + Sync + 'static>;
+
 pub async fn send_chat(input: AgentChatInput) -> AgentResult<AgentChatOutput> {
     AgentRuntime::default().send_chat(input).await
+}
+
+pub async fn send_chat_with_events(
+    input: AgentChatInput,
+    run_id: String,
+    emitter: AgentEventEmitter,
+) -> AgentResult<AgentChatOutput> {
+    AgentRuntime::default()
+        .send_chat_with_events(input, Some(run_id), Some(emitter))
+        .await
+}
+
+pub fn next_run_id() -> String {
+    generate_run_id()
 }
 
 pub struct AgentRuntime {
@@ -38,20 +55,34 @@ impl Default for AgentRuntime {
 
 impl AgentRuntime {
     pub async fn send_chat(&self, input: AgentChatInput) -> AgentResult<AgentChatOutput> {
-        let run_id = generate_run_id();
+        self.send_chat_with_events(input, None, None).await
+    }
+
+    pub async fn send_chat_with_events(
+        &self,
+        input: AgentChatInput,
+        run_id: Option<String>,
+        emitter: Option<AgentEventEmitter>,
+    ) -> AgentResult<AgentChatOutput> {
+        let run_id = run_id.unwrap_or_else(generate_run_id);
         let context = input.context.clone();
         let tool_registry =
             ToolRegistry::read_only_defaults_with_search(input.search_config.as_ref());
         let tool_definitions = tool_registry.definitions();
+        let mut event_stream = AgentEventStream::new(emitter);
+        event_stream.emit(AgentEvent::Started {
+            run_id: run_id.clone(),
+            tool_definitions: tool_definitions.clone(),
+        });
         let llm_request = build_llm_request(input, &tool_definitions)?;
         let mut messages = llm_request.messages;
         let tool_context = ToolExecutionContext::from_run_context(context.as_ref());
-        let mut events = vec![state_event(
+        event_stream.emit(state_event(
             &run_id,
             AgentRunStatus::Running,
             Some(run_id.clone()),
             None,
-        )];
+        ));
         let mut usage = None;
         let mut finish_reason = None;
         let mut final_content = None;
@@ -85,7 +116,7 @@ impl AgentRuntime {
 
             if iteration >= self.max_tool_iterations {
                 let message = "工具调用次数超过限制，已停止继续执行。".to_string();
-                events.push(AgentEvent::Error {
+                event_stream.emit(AgentEvent::Error {
                     run_id: Some(run_id.clone()),
                     message: message.clone(),
                     recoverable: false,
@@ -118,7 +149,7 @@ impl AgentRuntime {
                     },
                     reason: reason.or_else(|| Some("agent requested tool call".to_string())),
                 };
-                events.push(AgentEvent::ToolCall {
+                event_stream.emit(AgentEvent::ToolCall {
                     run_id: run_id.clone(),
                     call: call.clone(),
                 });
@@ -126,28 +157,41 @@ impl AgentRuntime {
                 if requires_approval {
                     let action = tool_registry.proposed_action(&call)?;
                     if let AgentProposedAction::Diff { diff } = &action {
-                        events.push(AgentEvent::Diff {
+                        event_stream.emit(AgentEvent::Diff {
                             run_id: run_id.clone(),
                             diff: diff.clone(),
                         });
                     }
+                    event_stream.emit(AgentEvent::ApprovalRequired {
+                        run_id: run_id.clone(),
+                        action: action.clone(),
+                    });
                     let content = build_approval_required_message(&action);
-                    events.push(AgentEvent::MessageDelta {
+                    event_stream.emit(AgentEvent::MessageDelta {
                         run_id: run_id.clone(),
                         delta: content.clone(),
                     });
-                    events.push(state_event(
+                    event_stream.emit(state_event(
                         &run_id,
                         AgentRunStatus::WaitingForApproval,
                         Some(run_id.clone()),
                         None,
+                    ));
+                    event_stream.emit(done_event(
+                        &run_id,
+                        true,
+                        AgentRunStatus::WaitingForApproval,
+                        Some(content.clone()),
+                        usage.clone(),
+                        finish_reason.clone(),
+                        vec![action.clone()],
                     ));
 
                     return Ok(AgentChatOutput {
                         content,
                         status: AgentRunStatus::WaitingForApproval,
                         run_id,
-                        events,
+                        events: event_stream.into_events(),
                         tool_definitions,
                         usage,
                         finish_reason,
@@ -156,7 +200,7 @@ impl AgentRuntime {
                 }
 
                 let result = tool_registry.execute(&tool_context, &call);
-                events.push(AgentEvent::ToolResult {
+                event_stream.emit(AgentEvent::ToolResult {
                     run_id: run_id.clone(),
                     result: result.clone(),
                 });
@@ -170,26 +214,56 @@ impl AgentRuntime {
         }
 
         let content = final_content.unwrap_or_else(|| "没有生成可显示的回复。".to_string());
-        events.push(AgentEvent::MessageDelta {
+        event_stream.emit(AgentEvent::MessageDelta {
             run_id: run_id.clone(),
             delta: content.clone(),
         });
-        events.push(state_event(&run_id, AgentRunStatus::Completed, None, None));
-        events.push(AgentEvent::Done {
-            run_id: run_id.clone(),
-            success: true,
-        });
+        event_stream.emit(state_event(&run_id, AgentRunStatus::Completed, None, None));
+        event_stream.emit(done_event(
+            &run_id,
+            true,
+            AgentRunStatus::Completed,
+            Some(content.clone()),
+            usage.clone(),
+            finish_reason.clone(),
+            Vec::new(),
+        ));
 
         Ok(AgentChatOutput {
             content,
             status: AgentRunStatus::Completed,
             run_id,
-            events,
+            events: event_stream.into_events(),
             tool_definitions,
             usage,
             finish_reason,
             proposed_actions: Vec::<AgentProposedAction>::new(),
         })
+    }
+}
+
+struct AgentEventStream {
+    events: Vec<AgentEvent>,
+    emitter: Option<AgentEventEmitter>,
+}
+
+impl AgentEventStream {
+    fn new(emitter: Option<AgentEventEmitter>) -> Self {
+        Self {
+            events: Vec::new(),
+            emitter,
+        }
+    }
+
+    fn emit(&mut self, event: AgentEvent) {
+        if let Some(emitter) = &self.emitter {
+            emitter(event.clone());
+        }
+        self.events.push(event);
+    }
+
+    fn into_events(self) -> Vec<AgentEvent> {
+        self.events
     }
 }
 
@@ -591,6 +665,26 @@ fn state_event(
             last_error,
             updated_at: now_ms(),
         },
+    }
+}
+
+fn done_event(
+    run_id: &str,
+    success: bool,
+    status: AgentRunStatus,
+    content: Option<String>,
+    usage: Option<AgentUsage>,
+    finish_reason: Option<String>,
+    proposed_actions: Vec<AgentProposedAction>,
+) -> AgentEvent {
+    AgentEvent::Done {
+        run_id: run_id.to_string(),
+        success,
+        status: Some(status),
+        content,
+        usage,
+        finish_reason,
+        proposed_actions,
     }
 }
 

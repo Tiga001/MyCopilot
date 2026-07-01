@@ -249,6 +249,10 @@ pub enum AgentProposedAction {
     rename_all_fields = "camelCase"
 )]
 pub enum AgentEvent {
+    Started {
+        run_id: String,
+        tool_definitions: Vec<AgentToolDefinition>,
+    },
     State {
         run_id: String,
         state: AgentStateSnapshot,
@@ -269,6 +273,10 @@ pub enum AgentEvent {
         run_id: String,
         result: AgentToolResult,
     },
+    ApprovalRequired {
+        run_id: String,
+        action: AgentProposedAction,
+    },
     Diff {
         run_id: String,
         diff: AgentDiffProposal,
@@ -287,6 +295,16 @@ pub enum AgentEvent {
     Done {
         run_id: String,
         success: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        status: Option<AgentRunStatus>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        content: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        usage: Option<AgentUsage>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        finish_reason: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        proposed_actions: Vec<AgentProposedAction>,
     },
 }
 

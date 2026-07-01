@@ -5,12 +5,14 @@ import {
   listPendingAgentActionsWithInvoker,
   rejectAgentActionWithInvoker,
   sendAgentChatWithInvoker,
+  startAgentChatWithInvoker,
 } from "@agent";
 import type {
   AgentActionExecutionOutput,
   AgentChatMessage,
   AgentChatOutput,
   AgentRunContext,
+  AgentStartChatOutput,
   PendingAgentActionSnapshot,
 } from "@agent";
 import type { ChatMessage } from "../chat/chatTypes";
@@ -31,6 +33,14 @@ export async function sendAgentMessage(input: SendAgentMessageInput): Promise<st
 }
 
 export async function sendAgentMessageOutput(input: SendAgentMessageInput): Promise<AgentChatOutput> {
+  return sendAgentChatWithInvoker(invoke, buildAgentChatInput(input));
+}
+
+export async function startAgentMessage(input: SendAgentMessageInput): Promise<AgentStartChatOutput> {
+  return startAgentChatWithInvoker(invoke, buildAgentChatInput(input));
+}
+
+function buildAgentChatInput(input: SendAgentMessageInput) {
   const messages: AgentChatMessage[] = input.messages
     .filter((message) => message.status !== "pending" && message.content.trim().length > 0)
     .map((message) => ({
@@ -38,14 +48,14 @@ export async function sendAgentMessageOutput(input: SendAgentMessageInput): Prom
       content: message.content,
     }));
 
-  return sendAgentChatWithInvoker(invoke, {
+  return {
     apiUrl: input.apiUrl,
     apiToken: input.apiToken,
     model: input.model,
     maxTokens: input.maxTokens,
     context: input.context,
     messages,
-  });
+  };
 }
 
 export async function listPendingAgentActions(): Promise<PendingAgentActionSnapshot[]> {

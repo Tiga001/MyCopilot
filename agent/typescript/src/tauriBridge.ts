@@ -1,7 +1,14 @@
 import type { AgentChatInput, AgentChatOutput, AgentProposedAction } from "./protocol";
 
+export const AGENT_EVENT_NAME = "agent_event";
+
 export interface AgentCommandInvoker {
   <T>(command: string, args?: Record<string, unknown>): Promise<T>;
+}
+
+export interface AgentStartChatOutput {
+  runId: string;
+  eventName: string;
 }
 
 export type AgentActionExecutionStatus = "applied" | "failed" | "rejected";
@@ -57,6 +64,13 @@ export async function sendAgentChatWithInvoker(
   input: AgentChatInput,
 ): Promise<AgentChatOutput> {
   return invokeAgentCommand<AgentChatOutput>("agent_send_chat", { input });
+}
+
+export async function startAgentChatWithInvoker(
+  invokeAgentCommand: AgentCommandInvoker,
+  input: AgentChatInput,
+): Promise<AgentStartChatOutput> {
+  return invokeAgentCommand<AgentStartChatOutput>("agent_start_chat", { input });
 }
 
 export async function listPendingAgentActionsWithInvoker(

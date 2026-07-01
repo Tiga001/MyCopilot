@@ -161,11 +161,13 @@ export type AgentProposedAction =
   | { type: "command"; command: AgentCommandRequest };
 
 export type AgentEvent =
+  | { type: "started"; runId: string; toolDefinitions: AgentToolDefinition[] }
   | { type: "state"; runId: string; state: AgentStateSnapshot }
   | { type: "message_delta"; runId: string; delta: string }
   | { type: "message"; runId: string; content: string }
   | { type: "tool_call"; runId: string; call: AgentToolCall }
   | { type: "tool_result"; runId: string; result: AgentToolResult }
+  | { type: "approval_required"; runId: string; action: AgentProposedAction }
   | { type: "diff"; runId: string; diff: AgentDiffProposal }
   | {
       type: "command_output";
@@ -175,4 +177,13 @@ export type AgentEvent =
       output: string;
     }
   | { type: "error"; runId?: string; message: string; recoverable: boolean }
-  | { type: "done"; runId: string; success: boolean };
+  | {
+      type: "done";
+      runId: string;
+      success: boolean;
+      status?: AgentRunStatus;
+      content?: string;
+      usage?: AgentUsage;
+      finishReason?: string;
+      proposedActions?: AgentProposedAction[];
+    };

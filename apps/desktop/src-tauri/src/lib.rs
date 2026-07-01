@@ -22,6 +22,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::agent::agent_send_chat,
+            commands::agent::agent_start_chat,
             commands::agent_actions::agent_list_pending_actions,
             commands::agent_actions::agent_approve_action,
             commands::agent_actions::agent_reject_action,
