@@ -4,10 +4,15 @@ import "./ChatConversationPage.css";
 
 interface ChatConversationPageProps {
   conversation: ChatConversation;
+  onStopGenerating?: () => void;
   onSubmitMessage: (message: string, options: ChatSubmitOptions) => void;
 }
 
-export function ChatConversationPage({ conversation, onSubmitMessage }: ChatConversationPageProps) {
+export function ChatConversationPage({ conversation, onStopGenerating, onSubmitMessage }: ChatConversationPageProps) {
+  const isGenerating = conversation.messages.some(
+    (message) => message.role === "assistant" && message.status === "pending",
+  );
+
   return (
     <section className="chat-conversation-page" aria-label={conversation.title}>
       <div className="chat-conversation-page__messages">
@@ -23,7 +28,11 @@ export function ChatConversationPage({ conversation, onSubmitMessage }: ChatConv
       </div>
 
       <div className="chat-conversation-page__composer">
-        <ChatComposer onSubmitMessage={onSubmitMessage} />
+        <ChatComposer
+          isGenerating={isGenerating}
+          onStopGenerating={onStopGenerating}
+          onSubmitMessage={onSubmitMessage}
+        />
       </div>
     </section>
   );

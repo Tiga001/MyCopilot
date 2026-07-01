@@ -12,10 +12,18 @@ export type AgentRunMode = "chat" | "plan" | "edit";
 
 export type AgentApiStyle = "openai_compatible" | "anthropic_compatible";
 
+export type AgentSearchMode = "auto" | "disabled" | "tavily";
+
 export type AgentToolName =
   | "read_file"
+  | "read_pdf"
+  | "read_word"
+  | "read_presentation"
+  | "read_spreadsheet"
   | "search_files"
   | "search_code"
+  | "web_search"
+  | "web_fetch"
   | "git_diff"
   | "generate_patch"
   | "apply_patch"
@@ -45,6 +53,11 @@ export interface AgentRunContext {
   workspace?: AgentWorkspaceContext;
 }
 
+export interface AgentSearchConfig {
+  mode: AgentSearchMode;
+  tavilyApiKey?: string;
+}
+
 export interface AgentChatInput {
   apiUrl: string;
   apiToken: string;
@@ -55,6 +68,7 @@ export interface AgentChatInput {
   mode?: AgentRunMode;
   stream?: boolean;
   context?: AgentRunContext;
+  searchConfig?: AgentSearchConfig;
   messages: AgentChatMessage[];
 }
 

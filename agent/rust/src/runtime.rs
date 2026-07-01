@@ -22,14 +22,12 @@ pub async fn send_chat(input: AgentChatInput) -> AgentResult<AgentChatOutput> {
 }
 
 pub struct AgentRuntime {
-    tool_registry: ToolRegistry,
     max_tool_iterations: usize,
 }
 
 impl Default for AgentRuntime {
     fn default() -> Self {
         Self {
-            tool_registry: ToolRegistry::read_only_defaults(),
             max_tool_iterations: MAX_TOOL_ITERATIONS,
         }
     }
@@ -39,7 +37,9 @@ impl AgentRuntime {
     pub async fn send_chat(&self, input: AgentChatInput) -> AgentResult<AgentChatOutput> {
         let run_id = generate_run_id();
         let context = input.context.clone();
-        let tool_definitions = self.tool_registry.definitions();
+        let tool_registry =
+            ToolRegistry::read_only_defaults_with_search(input.search_config.as_ref());
+        let tool_definitions = tool_registry.definitions();
         let llm_request = build_llm_request(input, &tool_definitions)?;
         let mut messages = llm_request.messages;
         let tool_context = ToolExecutionContext::from_run_context(context.as_ref());
@@ -96,7 +96,7 @@ impl AgentRuntime {
                 call: call.clone(),
             });
 
-            let result = self.tool_registry.execute(&tool_context, &call);
+            let result = tool_registry.execute(&tool_context, &call);
             events.push(AgentEvent::ToolResult {
                 run_id: run_id.clone(),
                 result: result.clone(),
@@ -235,7 +235,7 @@ fn build_system_prompt(
     format!(
         "你是 MyCopilot 的后端 coding agent，运行模式是 {mode_label}。\n\
         {workspace_note}\n\
-        你可以使用下列只读工具理解用户已选择的 workspace：\n\
+        你可以使用下列只读工具理解用户已选择的 workspace 或公开网页信息：\n\
         {tools}\n\
         如果需要调用工具，只能回复一个 JSON 对象，不要添加解释文字：\n\
         {{\"type\":\"tool_call\",\"tool\":\"search_files\",\"args\":{{\"query\":\"main\"}}}}\n\
@@ -463,7 +463,7 @@ mod tests {
             vec![message("user", "Read src/main.rs")],
             AgentRunMode::Chat,
             Some(&context),
-            &ToolRegistry::read_only_defaults().definitions(),
+            &ToolRegistry::read_only_defaults_with_search(None).definitions(),
         )
         .unwrap();
 

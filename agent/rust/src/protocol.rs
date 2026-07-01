@@ -15,6 +15,7 @@ pub struct AgentChatInput {
     pub mode: Option<AgentRunMode>,
     pub stream: Option<bool>,
     pub context: Option<AgentRunContext>,
+    pub search_config: Option<AgentSearchConfig>,
     pub messages: Vec<AgentChatMessage>,
 }
 
@@ -63,6 +64,22 @@ pub enum AgentRunMode {
 pub enum AgentApiStyle {
     OpenAiCompatible,
     AnthropicCompatible,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSearchMode {
+    Auto,
+    Disabled,
+    Tavily,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSearchConfig {
+    pub mode: AgentSearchMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tavily_api_key: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]

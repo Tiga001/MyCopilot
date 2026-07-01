@@ -65,6 +65,7 @@ function getErrorMessage(error: unknown) {
 
 export function App() {
   const shellRef = useRef<HTMLDivElement>(null);
+  const cancelledPendingMessageIdsRef = useRef<Set<string>>(new Set());
   const { t } = useFrontendConfig();
   const { apiToken, apiUrl, models } = useModelSettings();
   const { hasLoadedProjects, projects } = useProjectSettings();
@@ -215,6 +216,11 @@ export function App() {
           model: apiModelId,
         });
 
+        if (cancelledPendingMessageIdsRef.current.has(pendingMessageId)) {
+          cancelledPendingMessageIdsRef.current.delete(pendingMessageId);
+          return;
+        }
+
         setConversations((currentConversations) =>
           currentConversations.map((conversation) =>
             conversation.id === conversationId
@@ -235,6 +241,11 @@ export function App() {
           ),
         );
       } catch (error) {
+        if (cancelledPendingMessageIdsRef.current.has(pendingMessageId)) {
+          cancelledPendingMessageIdsRef.current.delete(pendingMessageId);
+          return;
+        }
+
         setConversations((currentConversations) =>
           currentConversations.map((conversation) =>
             conversation.id === conversationId
@@ -341,6 +352,38 @@ export function App() {
     setWorkspaceView("conversation");
   }, []);
 
+  const stopActiveGeneration = useCallback(() => {
+    if (!activeConversationId) return;
+
+    const activeConversationSnapshot = conversations.find((conversation) => conversation.id === activeConversationId);
+    const pendingMessage = [...(activeConversationSnapshot?.messages ?? [])]
+      .reverse()
+      .find((message) => message.role === "assistant" && message.status === "pending");
+
+    if (!pendingMessage) return;
+
+    cancelledPendingMessageIdsRef.current.add(pendingMessage.id);
+    setConversations((currentConversations) =>
+      currentConversations.map((conversation) =>
+        conversation.id === activeConversationId
+          ? {
+              ...conversation,
+              messages: conversation.messages.map((message) =>
+                message.id === pendingMessage.id
+                  ? {
+                      ...message,
+                      content: "已停止生成。",
+                      status: "sent",
+                    }
+                  : message,
+              ),
+              updatedAt: Date.now(),
+            }
+          : conversation,
+      ),
+    );
+  }, [activeConversationId, conversations]);
+
   if (view === "settings") {
     return <SettingsPage onBack={() => setView("workspace")} />;
   }
@@ -406,7 +449,11 @@ export function App() {
             <NewConversationPage defaultProjectId={newConversationProjectId} onSubmitMessage={createConversationFromMessage} />
           )}
           {workspaceView === "conversation" && activeConversation && (
-            <ChatConversationPage conversation={activeConversation} onSubmitMessage={appendMessageToActiveConversation} />
+            <ChatConversationPage
+              conversation={activeConversation}
+              onStopGenerating={stopActiveGeneration}
+              onSubmitMessage={appendMessageToActiveConversation}
+            />
           )}
         </div>
       </main>

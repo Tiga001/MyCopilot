@@ -16,6 +16,8 @@ export type {
   AgentRunContext,
   AgentRunMode,
   AgentRunStatus,
+  AgentSearchConfig,
+  AgentSearchMode,
   AgentStateSnapshot,
   AgentToolCall,
   AgentToolDefinition,
