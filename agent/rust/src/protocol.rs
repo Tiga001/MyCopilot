@@ -16,6 +16,7 @@ pub struct AgentChatInput {
     pub stream: Option<bool>,
     pub context: Option<AgentRunContext>,
     pub search_config: Option<AgentSearchConfig>,
+    pub approval_decision: Option<AgentApprovalDecision>,
     pub messages: Vec<AgentChatMessage>,
 }
 
@@ -84,6 +85,15 @@ pub struct AgentSearchConfig {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
+pub struct AgentApprovalDecision {
+    pub action_id: String,
+    pub status: AgentApprovalDecisionStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentRunContext {
     pub conversation_id: Option<String>,
     pub project_id: Option<String>,
@@ -129,6 +139,13 @@ pub enum AgentApprovalStatus {
 
 #[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum AgentApprovalDecisionStatus {
+    Approved,
+    Rejected,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum AgentToolSafety {
     ReadOnly,
     RequiresApproval,
@@ -140,6 +157,16 @@ pub enum AgentToolSafety {
 pub enum AgentCommandOutputStream {
     Stdout,
     Stderr,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentCommandRiskLevel {
+    ReadOnly,
+    WritesWorkspace,
+    Network,
+    Destructive,
+    Unknown,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -179,6 +206,7 @@ pub struct AgentToolResult {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentDiffProposal {
+    pub id: String,
     pub file_path: String,
     pub patch: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -189,12 +217,15 @@ pub struct AgentDiffProposal {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentCommandRequest {
+    pub id: String,
     pub command: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
     pub approval_status: AgentApprovalStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub risk_level: Option<AgentCommandRiskLevel>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }

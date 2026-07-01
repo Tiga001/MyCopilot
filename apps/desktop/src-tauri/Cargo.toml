@@ -15,6 +15,7 @@ tauri-build = { version = "2", features = [] }
 my-copilot-agent = { path = "../../../agent/rust" }
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 tauri = { version = "2", features = [] }
 # time 0.3.52 changed a parsing API still used by cookie 0.18.1.
 time = "=0.3.51"

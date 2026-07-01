@@ -1,24 +1,28 @@
+mod generate_patch;
 mod git_diff;
 mod read_file;
 mod read_pdf;
 mod read_presentation;
 mod read_spreadsheet;
 mod read_word;
+mod run_command;
 mod search_code;
 mod search_files;
 mod web_fetch;
 mod web_search;
 
 use crate::protocol::{
-    AgentError, AgentResult, AgentRunContext, AgentSearchConfig, AgentSearchMode, AgentToolCall,
-    AgentToolDefinition, AgentToolResult,
+    AgentError, AgentProposedAction, AgentResult, AgentRunContext, AgentSearchConfig,
+    AgentSearchMode, AgentToolCall, AgentToolDefinition, AgentToolResult,
 };
+use generate_patch::{ApplyPatchTool, GeneratePatchTool};
 use git_diff::GitDiffTool;
 use read_file::ReadFileTool;
 use read_pdf::ReadPdfTool;
 use read_presentation::ReadPresentationTool;
 use read_spreadsheet::ReadSpreadsheetTool;
 use read_word::ReadWordTool;
+use run_command::RunCommandTool;
 use search_code::SearchCodeTool;
 use search_files::SearchFilesTool;
 use serde_json::Value;
@@ -75,11 +79,26 @@ impl ToolRegistry {
             registry.register(WebFetchTool::new(api_key));
         }
         registry.register(GitDiffTool);
+        registry.register(GeneratePatchTool);
+        registry.register(ApplyPatchTool);
+        registry.register(RunCommandTool);
         registry
     }
 
     pub fn definitions(&self) -> Vec<AgentToolDefinition> {
         self.tools.values().map(|tool| tool.definition()).collect()
+    }
+
+    pub fn definition_for(&self, tool_name: &str) -> Option<AgentToolDefinition> {
+        self.tools.get(tool_name).map(|tool| tool.definition())
+    }
+
+    pub fn proposed_action(&self, call: &AgentToolCall) -> AgentResult<AgentProposedAction> {
+        let Some(tool) = self.tools.get(&call.tool) else {
+            return Err(AgentError::new(format!("未知工具：{}", call.tool)));
+        };
+
+        tool.proposed_action(call)
     }
 
     pub fn execute(&self, context: &ToolExecutionContext, call: &AgentToolCall) -> AgentToolResult {
@@ -186,6 +205,9 @@ impl ToolExecutionContext {
 pub(super) trait AgentTool: Send + Sync {
     fn definition(&self) -> AgentToolDefinition;
     fn execute(&self, context: &ToolExecutionContext, args: Value) -> AgentResult<Value>;
+    fn proposed_action(&self, call: &AgentToolCall) -> AgentResult<AgentProposedAction> {
+        Ok(AgentProposedAction::ToolCall { call: call.clone() })
+    }
 }
 
 pub(super) struct WalkEntry {
@@ -548,6 +570,36 @@ mod tests {
 
         assert!(tools.contains(&"web_search".to_string()));
         assert!(tools.contains(&"web_fetch".to_string()));
+    }
+
+    #[test]
+    fn registers_run_command_as_approval_tool() {
+        let registry = ToolRegistry::read_only_defaults_with_search(None);
+        let definition = registry.definition_for("run_command").unwrap();
+
+        assert_eq!(definition.name, "run_command");
+        assert!(definition.requires_workspace);
+        assert!(definition.requires_approval);
+    }
+
+    #[test]
+    fn registers_generate_patch_as_approval_tool() {
+        let registry = ToolRegistry::read_only_defaults_with_search(None);
+        let definition = registry.definition_for("generate_patch").unwrap();
+
+        assert_eq!(definition.name, "generate_patch");
+        assert!(definition.requires_workspace);
+        assert!(definition.requires_approval);
+    }
+
+    #[test]
+    fn registers_apply_patch_as_approval_tool() {
+        let registry = ToolRegistry::read_only_defaults_with_search(None);
+        let definition = registry.definition_for("apply_patch").unwrap();
+
+        assert_eq!(definition.name, "apply_patch");
+        assert!(definition.requires_workspace);
+        assert!(definition.requires_approval);
     }
 
     struct TestWorkspace {

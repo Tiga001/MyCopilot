@@ -1,7 +1,55 @@
-import type { AgentChatInput, AgentChatOutput } from "./protocol";
+import type { AgentChatInput, AgentChatOutput, AgentProposedAction } from "./protocol";
 
 export interface AgentCommandInvoker {
   <T>(command: string, args?: Record<string, unknown>): Promise<T>;
+}
+
+export type AgentActionExecutionStatus = "applied" | "failed" | "rejected";
+
+export interface AgentGitDiffSnapshot {
+  patch: string;
+  truncated: boolean;
+}
+
+export interface AgentPatchExecutionResult {
+  filePath: string;
+  appliedFilePaths: string[];
+  gitDiff?: AgentGitDiffSnapshot;
+  gitDiffError?: string;
+  error?: string;
+}
+
+export interface AgentCommandExecutionResult {
+  command: string;
+  cwd: string;
+  exitCode?: number;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
+  cancelled: boolean;
+  durationMs: number;
+  stdoutTruncated: boolean;
+  stderrTruncated: boolean;
+  error?: string;
+}
+
+export interface AgentActionExecutionOutput {
+  actionId: string;
+  actionType: string;
+  toolName: string;
+  status: AgentActionExecutionStatus;
+  patchResult?: AgentPatchExecutionResult;
+  commandResult?: AgentCommandExecutionResult;
+  agentOutput: AgentChatOutput;
+}
+
+export interface PendingAgentActionSnapshot {
+  actionId: string;
+  actionType: string;
+  toolName: string;
+  runId: string;
+  action: AgentProposedAction;
+  createdAt: number;
 }
 
 export async function sendAgentChatWithInvoker(
@@ -9,4 +57,32 @@ export async function sendAgentChatWithInvoker(
   input: AgentChatInput,
 ): Promise<AgentChatOutput> {
   return invokeAgentCommand<AgentChatOutput>("agent_send_chat", { input });
+}
+
+export async function listPendingAgentActionsWithInvoker(
+  invokeAgentCommand: AgentCommandInvoker,
+): Promise<PendingAgentActionSnapshot[]> {
+  return invokeAgentCommand<PendingAgentActionSnapshot[]>("agent_list_pending_actions");
+}
+
+export async function approveAgentActionWithInvoker(
+  invokeAgentCommand: AgentCommandInvoker,
+  actionId: string,
+): Promise<AgentActionExecutionOutput> {
+  return invokeAgentCommand<AgentActionExecutionOutput>("agent_approve_action", { actionId });
+}
+
+export async function rejectAgentActionWithInvoker(
+  invokeAgentCommand: AgentCommandInvoker,
+  actionId: string,
+  message?: string,
+): Promise<AgentActionExecutionOutput> {
+  return invokeAgentCommand<AgentActionExecutionOutput>("agent_reject_action", { actionId, message });
+}
+
+export async function cancelAgentActionWithInvoker(
+  invokeAgentCommand: AgentCommandInvoker,
+  actionId: string,
+): Promise<boolean> {
+  return invokeAgentCommand<boolean>("agent_cancel_action", { actionId });
 }

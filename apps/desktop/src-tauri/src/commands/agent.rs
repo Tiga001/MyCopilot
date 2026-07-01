@@ -1,3 +1,4 @@
+use crate::agent_actions::AgentActionState;
 use crate::storage::{config_repository, storage_error, StorageState};
 use my_copilot_agent::{
     send_chat, AgentChatInput, AgentChatOutput, AgentSearchConfig, AgentSearchMode,
@@ -7,10 +8,15 @@ use tauri::State;
 #[tauri::command]
 pub async fn agent_send_chat(
     mut input: AgentChatInput,
-    state: State<'_, StorageState>,
+    storage_state: State<'_, StorageState>,
+    action_state: State<'_, AgentActionState>,
 ) -> Result<AgentChatOutput, String> {
-    input.search_config = load_agent_search_config(state)?;
-    send_chat(input).await.map_err(|error| error.to_string())
+    input.search_config = load_agent_search_config(storage_state)?;
+    let output = send_chat(input.clone())
+        .await
+        .map_err(|error| error.to_string())?;
+    action_state.store_output_actions(&input, &output);
+    Ok(output)
 }
 
 fn load_agent_search_config(

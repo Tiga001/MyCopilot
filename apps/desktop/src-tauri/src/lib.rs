@@ -1,4 +1,8 @@
+mod agent_actions;
 mod commands;
+mod fs;
+mod git;
+mod process;
 mod storage;
 
 use tauri::Manager;
@@ -12,10 +16,16 @@ pub fn run() {
             let database_path = app_data_dir.join("mycopilot.sqlite3");
             let storage = storage::StorageState::open(&database_path)?;
             app.manage(storage);
+            app.manage(agent_actions::AgentActionState::default());
+            app.manage(process::command_runner::CommandRunState::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::agent::agent_send_chat,
+            commands::agent_actions::agent_list_pending_actions,
+            commands::agent_actions::agent_approve_action,
+            commands::agent_actions::agent_reject_action,
+            commands::agent_actions::agent_cancel_action,
             storage::commands::load_app_data,
             storage::commands::load_model_settings,
             storage::commands::save_model_settings,

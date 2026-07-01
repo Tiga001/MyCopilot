@@ -1,6 +1,9 @@
-use crate::llm::{complete_chat, detect_api_style, LlmChatRequest};
+use crate::llm::{
+    complete_chat, detect_api_style, LlmChatRequest, LlmMessage, LlmMessageRole, LlmToolCall,
+};
 use crate::protocol::{
-    AgentApprovalStatus, AgentChatInput, AgentChatMessage, AgentChatOutput, AgentError, AgentEvent,
+    AgentApprovalDecision, AgentApprovalDecisionStatus, AgentApprovalStatus, AgentChatInput,
+    AgentChatMessage, AgentChatOutput, AgentCommandRiskLevel, AgentError, AgentEvent,
     AgentProposedAction, AgentResult, AgentRunContext, AgentRunMode, AgentRunStatus,
     AgentStateSnapshot, AgentToolCall, AgentToolDefinition, AgentToolResult, AgentUsage,
 };
@@ -62,16 +65,23 @@ impl AgentRuntime {
                 max_tokens: llm_request.max_tokens,
                 temperature: llm_request.temperature,
                 messages: messages.clone(),
+                tools: llm_request.tools.clone(),
             })
             .await?;
 
             merge_usage(&mut usage, llm_response.usage);
             finish_reason = llm_response.finish_reason;
 
-            let Some(tool_request) = parse_tool_call_request(&llm_response.content) else {
+            let tool_requests = tool_calls_from_response(
+                llm_response.tool_calls,
+                &llm_response.content,
+                &run_id,
+                iteration,
+            );
+            if tool_requests.is_empty() {
                 final_content = Some(llm_response.content);
                 break;
-            };
+            }
 
             if iteration >= self.max_tool_iterations {
                 let message = "工具调用次数超过限制，已停止继续执行。".to_string();
@@ -84,32 +94,79 @@ impl AgentRuntime {
                 break;
             }
 
-            let call = AgentToolCall {
-                id: format!("tool-{run_id}-{}", iteration + 1),
-                tool: tool_request.tool,
-                args: tool_request.args,
-                approval_status: AgentApprovalStatus::NotRequired,
-                reason: Some("read-only harness tool".to_string()),
-            };
-            events.push(AgentEvent::ToolCall {
-                run_id: run_id.clone(),
-                call: call.clone(),
-            });
+            messages.push(LlmMessage::assistant(
+                llm_response.content.clone(),
+                tool_requests.clone(),
+            ));
 
-            let result = tool_registry.execute(&tool_context, &call);
-            events.push(AgentEvent::ToolResult {
-                run_id: run_id.clone(),
-                result: result.clone(),
-            });
+            for tool_request in tool_requests {
+                let tool_name = tool_request.name;
+                let tool_args = tool_request.args;
+                let reason = extract_reason_from_args(&tool_args);
+                let requires_approval = tool_registry
+                    .definition_for(&tool_name)
+                    .map(|definition| definition.requires_approval)
+                    .unwrap_or(false);
+                let call = AgentToolCall {
+                    id: tool_request.id,
+                    tool: tool_name,
+                    args: tool_args,
+                    approval_status: if requires_approval {
+                        AgentApprovalStatus::Required
+                    } else {
+                        AgentApprovalStatus::NotRequired
+                    },
+                    reason: reason.or_else(|| Some("agent requested tool call".to_string())),
+                };
+                events.push(AgentEvent::ToolCall {
+                    run_id: run_id.clone(),
+                    call: call.clone(),
+                });
 
-            messages.push(AgentChatMessage {
-                role: "assistant".to_string(),
-                content: llm_response.content,
-            });
-            messages.push(AgentChatMessage {
-                role: "user".to_string(),
-                content: build_tool_observation_message(&result),
-            });
+                if requires_approval {
+                    let action = tool_registry.proposed_action(&call)?;
+                    if let AgentProposedAction::Diff { diff } = &action {
+                        events.push(AgentEvent::Diff {
+                            run_id: run_id.clone(),
+                            diff: diff.clone(),
+                        });
+                    }
+                    let content = build_approval_required_message(&action);
+                    events.push(AgentEvent::MessageDelta {
+                        run_id: run_id.clone(),
+                        delta: content.clone(),
+                    });
+                    events.push(state_event(
+                        &run_id,
+                        AgentRunStatus::WaitingForApproval,
+                        Some(run_id.clone()),
+                        None,
+                    ));
+
+                    return Ok(AgentChatOutput {
+                        content,
+                        status: AgentRunStatus::WaitingForApproval,
+                        run_id,
+                        events,
+                        tool_definitions,
+                        usage,
+                        finish_reason,
+                        proposed_actions: vec![action],
+                    });
+                }
+
+                let result = tool_registry.execute(&tool_context, &call);
+                events.push(AgentEvent::ToolResult {
+                    run_id: run_id.clone(),
+                    result: result.clone(),
+                });
+
+                messages.push(LlmMessage::tool_result(
+                    call.id,
+                    build_tool_observation_message(&result),
+                    !result.ok,
+                ));
+            }
         }
 
         let content = final_content.unwrap_or_else(|| "没有生成可显示的回复。".to_string());
@@ -148,6 +205,7 @@ fn build_llm_request(
         input.messages,
         mode,
         input.context.as_ref(),
+        input.approval_decision.as_ref(),
         tool_definitions,
     )?;
 
@@ -159,6 +217,7 @@ fn build_llm_request(
         max_tokens: sanitize_max_tokens(input.max_tokens),
         temperature: sanitize_temperature(input.temperature),
         messages,
+        tools: tool_definitions.to_vec(),
     })
 }
 
@@ -166,8 +225,9 @@ fn build_runtime_messages(
     messages: Vec<AgentChatMessage>,
     mode: AgentRunMode,
     context: Option<&AgentRunContext>,
+    approval_decision: Option<&AgentApprovalDecision>,
     tool_definitions: &[AgentToolDefinition],
-) -> AgentResult<Vec<AgentChatMessage>> {
+) -> AgentResult<Vec<LlmMessage>> {
     let mut normalized = normalize_messages(messages)?;
 
     if normalized.is_empty() {
@@ -178,15 +238,43 @@ fn build_runtime_messages(
         return Err(AgentError::new("对话里缺少用户或助手消息。"));
     }
 
-    normalized.insert(
+    if let Some(approval_decision) = approval_decision {
+        normalized.push(AgentChatMessage {
+            role: "user".to_string(),
+            content: build_approval_decision_observation(approval_decision),
+        });
+    }
+
+    let mut runtime_messages = normalized
+        .into_iter()
+        .map(agent_message_to_llm_message)
+        .collect::<AgentResult<Vec<_>>>()?;
+
+    runtime_messages.insert(
         0,
-        AgentChatMessage {
-            role: "system".to_string(),
-            content: build_system_prompt(mode, context, tool_definitions),
-        },
+        LlmMessage::text(
+            LlmMessageRole::System,
+            build_system_prompt(mode, context, tool_definitions),
+        ),
     );
 
-    Ok(normalized)
+    Ok(runtime_messages)
+}
+
+fn agent_message_to_llm_message(message: AgentChatMessage) -> AgentResult<LlmMessage> {
+    let role = match message.role.as_str() {
+        "system" => LlmMessageRole::System,
+        "user" => LlmMessageRole::User,
+        "assistant" => LlmMessageRole::Assistant,
+        _ => {
+            return Err(AgentError::new(format!(
+                "不支持的消息角色：{}",
+                message.role
+            )))
+        }
+    };
+
+    Ok(LlmMessage::text(role, message.content))
 }
 
 fn normalize_messages(messages: Vec<AgentChatMessage>) -> AgentResult<Vec<AgentChatMessage>> {
@@ -235,11 +323,12 @@ fn build_system_prompt(
     format!(
         "你是 MyCopilot 的后端 coding agent，运行模式是 {mode_label}。\n\
         {workspace_note}\n\
-        你可以使用下列只读工具理解用户已选择的 workspace 或公开网页信息：\n\
+        你可以通过模型 API 的原生 tool/function calling 使用下列工具理解用户已选择的 workspace、公开网页信息，或请求用户批准危险动作：\n\
         {tools}\n\
-        如果需要调用工具，只能回复一个 JSON 对象，不要添加解释文字：\n\
-        {{\"type\":\"tool_call\",\"tool\":\"search_files\",\"args\":{{\"query\":\"main\"}}}}\n\
-        工具返回后你会收到 tool_result observation，然后再继续推理并给出最终回答。\n\
+        如果需要调用工具，必须使用原生 tool/function calling，不要手写 JSON tool_call 文本。\n\
+        工具返回后你会收到 tool result，然后再继续推理并给出最终回答。\n\
+        对 requiresApproval=true 的工具，只能提出请求；用户批准前不能声称已经执行。\n\
+        如果收到 approval_decision observation，必须遵守用户的拒绝理由或改法要求，不要重复提出完全相同的请求。\n\
         你可以解释代码、制定计划、提出补丁或命令，但不能声称已经执行文件读写、命令、Git 操作或安装依赖。\n\
         任何写文件、应用 patch、运行命令、安装依赖、Git 修改类操作，都必须作为待确认动作交给 Tauri/Rust 层执行。\n\
         回答要直接、可执行；如果提出修改，优先用清晰的 diff/patch 或分步骤计划表达。"
@@ -250,11 +339,12 @@ fn format_tool_definitions(tool_definitions: &[AgentToolDefinition]) -> String {
     tool_definitions
         .iter()
         .map(|definition| {
-            let schema = serde_json::to_string(&definition.input_schema)
-                .unwrap_or_else(|_| "{}".to_string());
             format!(
-                "- {}: {} input_schema={}",
-                definition.name, definition.description, schema
+                "- {}: {} requiresWorkspace={} requiresApproval={}",
+                definition.name,
+                definition.description,
+                definition.requires_workspace,
+                definition.requires_approval
             )
         })
         .collect::<Vec<_>>()
@@ -301,6 +391,27 @@ fn parse_tool_call_request(content: &str) -> Option<ToolCallRequest> {
         tool,
         args: envelope.args.unwrap_or_else(|| json!({})),
     })
+}
+
+fn tool_calls_from_response(
+    native_tool_calls: Vec<LlmToolCall>,
+    content: &str,
+    run_id: &str,
+    iteration: usize,
+) -> Vec<LlmToolCall> {
+    if !native_tool_calls.is_empty() {
+        return native_tool_calls;
+    }
+
+    parse_tool_call_request(content)
+        .map(|request| {
+            vec![LlmToolCall {
+                id: format!("tool-{run_id}-{}", iteration + 1),
+                name: request.tool,
+                args: request.args,
+            }]
+        })
+        .unwrap_or_default()
 }
 
 fn extract_json_value(content: &str) -> Option<Value> {
@@ -354,6 +465,79 @@ fn build_tool_observation_message(result: &AgentToolResult) -> String {
     format!(
         "Tool result observation. Use this result to continue. Do not repeat the same tool call unless more information is needed.\n```json\n{payload}\n```"
     )
+}
+
+fn build_approval_decision_observation(decision: &AgentApprovalDecision) -> String {
+    let status = match decision.status {
+        AgentApprovalDecisionStatus::Approved => "approved",
+        AgentApprovalDecisionStatus::Rejected => "rejected",
+    };
+    let payload = json!({
+        "type": "approval_decision",
+        "actionId": decision.action_id,
+        "status": status,
+        "message": decision.message
+    });
+    let payload = serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string());
+
+    format!(
+        "Approval decision observation. If rejected, respect the user's reason or requested alternative before continuing.\n```json\n{payload}\n```"
+    )
+}
+
+fn build_approval_required_message(action: &AgentProposedAction) -> String {
+    match action {
+        AgentProposedAction::Command { command } => {
+            let mut lines = vec![
+                "需要审批后才能运行命令。".to_string(),
+                format!("命令：`{}`", command.command),
+            ];
+            if let Some(cwd) = &command.cwd {
+                lines.push(format!("工作目录：`{cwd}`"));
+            }
+            if let Some(timeout_ms) = command.timeout_ms {
+                lines.push(format!("超时：{timeout_ms} ms"));
+            }
+            if let Some(risk_level) = command.risk_level {
+                lines.push(format!("风险级别：{}", command_risk_label(risk_level)));
+            }
+            if let Some(reason) = &command.reason {
+                lines.push(format!("原因：{reason}"));
+            }
+            lines.push("你可以批准执行，也可以拒绝并说明原因或要求换一种做法。".to_string());
+            lines.join("\n")
+        }
+        AgentProposedAction::ToolCall { call } => format!(
+            "工具 `{}` 需要审批后才能执行。你可以批准，也可以拒绝并说明原因或要求换一种做法。",
+            call.tool
+        ),
+        AgentProposedAction::Diff { diff } => format!(
+            "文件 `{}` 的修改需要审批后才能应用。\n{}\n你可以批准，也可以拒绝并说明原因或要求换一种做法。",
+            diff.file_path,
+            diff.summary
+                .as_deref()
+                .map(|summary| format!("摘要：{summary}"))
+                .unwrap_or_else(|| "摘要：未提供".to_string())
+        ),
+    }
+}
+
+fn command_risk_label(risk_level: AgentCommandRiskLevel) -> &'static str {
+    match risk_level {
+        AgentCommandRiskLevel::ReadOnly => "read_only",
+        AgentCommandRiskLevel::WritesWorkspace => "writes_workspace",
+        AgentCommandRiskLevel::Network => "network",
+        AgentCommandRiskLevel::Destructive => "destructive",
+        AgentCommandRiskLevel::Unknown => "unknown",
+    }
+}
+
+fn extract_reason_from_args(args: &Value) -> Option<String> {
+    args.get("reason")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|reason| !reason.is_empty())
+        .map(ToString::to_string)
 }
 
 fn merge_usage(total: &mut Option<AgentUsage>, next: Option<AgentUsage>) {
@@ -463,14 +647,37 @@ mod tests {
             vec![message("user", "Read src/main.rs")],
             AgentRunMode::Chat,
             Some(&context),
+            None,
             &ToolRegistry::read_only_defaults_with_search(None).definitions(),
         )
         .unwrap();
 
-        assert_eq!(messages[0].role, "system");
+        assert_eq!(messages[0].role.as_str(), "system");
         assert!(messages[0].content.contains("MyCopilot"));
         assert!(!messages[0].content.contains("/private/path"));
-        assert_eq!(messages[1].role, "user");
+        assert_eq!(messages[1].role.as_str(), "user");
+    }
+
+    #[test]
+    fn runtime_messages_include_approval_decision_observation() {
+        let decision = AgentApprovalDecision {
+            action_id: "tool-1".to_string(),
+            status: AgentApprovalDecisionStatus::Rejected,
+            message: Some("不要运行安装命令，先说明替代方案。".to_string()),
+        };
+        let messages = build_runtime_messages(
+            vec![message("user", "Run pnpm install")],
+            AgentRunMode::Chat,
+            None,
+            Some(&decision),
+            &ToolRegistry::read_only_defaults_with_search(None).definitions(),
+        )
+        .unwrap();
+
+        assert!(messages
+            .iter()
+            .any(|message| message.content.contains("approval_decision")
+                && message.content.contains("不要运行安装命令")));
     }
 
     #[test]

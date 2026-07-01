@@ -4,8 +4,9 @@ mod runtime;
 mod tools;
 
 pub use protocol::{
-    AgentApiStyle, AgentApprovalStatus, AgentChatInput, AgentChatMessage, AgentChatOutput,
-    AgentCommandOutputStream, AgentCommandRequest, AgentDiffProposal, AgentError, AgentEvent,
+    AgentApiStyle, AgentApprovalDecision, AgentApprovalDecisionStatus, AgentApprovalStatus,
+    AgentChatInput, AgentChatMessage, AgentChatOutput, AgentCommandOutputStream,
+    AgentCommandRequest, AgentCommandRiskLevel, AgentDiffProposal, AgentError, AgentEvent,
     AgentProposedAction, AgentResult, AgentRunContext, AgentRunMode, AgentRunStatus,
     AgentSearchConfig, AgentSearchMode, AgentStateSnapshot, AgentToolCall, AgentToolDefinition,
     AgentToolResult, AgentToolSafety, AgentUsage, AgentWorkspaceContext,

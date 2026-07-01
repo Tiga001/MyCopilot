@@ -34,7 +34,16 @@ export type AgentToolSafety = "read_only" | "requires_approval" | "destructive";
 
 export type AgentApprovalStatus = "not_required" | "required" | "approved" | "rejected";
 
+export type AgentApprovalDecisionStatus = "approved" | "rejected";
+
 export type AgentCommandOutputStream = "stdout" | "stderr";
+
+export type AgentCommandRiskLevel =
+  | "read_only"
+  | "writes_workspace"
+  | "network"
+  | "destructive"
+  | "unknown";
 
 export interface AgentChatMessage {
   role: AgentMessageRole;
@@ -58,6 +67,12 @@ export interface AgentSearchConfig {
   tavilyApiKey?: string;
 }
 
+export interface AgentApprovalDecision {
+  actionId: string;
+  status: AgentApprovalDecisionStatus;
+  message?: string;
+}
+
 export interface AgentChatInput {
   apiUrl: string;
   apiToken: string;
@@ -69,6 +84,7 @@ export interface AgentChatInput {
   stream?: boolean;
   context?: AgentRunContext;
   searchConfig?: AgentSearchConfig;
+  approvalDecision?: AgentApprovalDecision;
   messages: AgentChatMessage[];
 }
 
@@ -79,7 +95,7 @@ export interface AgentUsage {
 }
 
 export interface AgentChatOutput {
-  status: Extract<AgentRunStatus, "completed">;
+  status: AgentRunStatus;
   content: string;
   runId: string;
   events: AgentEvent[];
@@ -122,6 +138,7 @@ export interface AgentToolResult {
 }
 
 export interface AgentDiffProposal {
+  id: string;
   filePath: string;
   patch: string;
   summary?: string;
@@ -129,10 +146,12 @@ export interface AgentDiffProposal {
 }
 
 export interface AgentCommandRequest {
+  id: string;
   command: string;
   cwd?: string;
   timeoutMs?: number;
   approvalStatus: AgentApprovalStatus;
+  riskLevel?: AgentCommandRiskLevel;
   reason?: string;
 }
 

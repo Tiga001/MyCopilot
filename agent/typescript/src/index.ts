@@ -1,14 +1,23 @@
 export type {
+  AgentActionExecutionOutput,
+  AgentActionExecutionStatus,
+  AgentCommandExecutionResult,
   AgentCommandInvoker,
+  AgentGitDiffSnapshot,
+  AgentPatchExecutionResult,
+  PendingAgentActionSnapshot,
 } from "./tauriBridge";
 export type {
   AgentApiStyle,
+  AgentApprovalDecision,
+  AgentApprovalDecisionStatus,
   AgentApprovalStatus,
   AgentChatInput,
   AgentChatMessage,
   AgentChatOutput,
   AgentCommandOutputStream,
   AgentCommandRequest,
+  AgentCommandRiskLevel,
   AgentDiffProposal,
   AgentEvent,
   AgentMessageRole,
@@ -27,4 +36,10 @@ export type {
   AgentUsage,
   AgentWorkspaceContext,
 } from "./protocol";
-export { sendAgentChatWithInvoker } from "./tauriBridge";
+export {
+  approveAgentActionWithInvoker,
+  cancelAgentActionWithInvoker,
+  listPendingAgentActionsWithInvoker,
+  rejectAgentActionWithInvoker,
+  sendAgentChatWithInvoker,
+} from "./tauriBridge";

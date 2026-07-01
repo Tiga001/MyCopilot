@@ -2018,6 +2018,7 @@ dependencies = [
  "my-copilot-agent",
  "rusqlite",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "time",
