@@ -1,4 +1,5 @@
 packages:
+  - "agent/typescript"
   - "apps/*"
   - "packages/*"
 

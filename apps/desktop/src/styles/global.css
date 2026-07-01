@@ -1,16 +1,14 @@
 :root {
-  font-family:
-    Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Text",
-    "Segoe UI", sans-serif;
-  color: #202123;
-  background: #f7f7f6;
+  font-family: var(--mc-font-family);
+  color: var(--mc-color-text-primary);
+  background: var(--mc-color-surface-app);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   --titlebar-height: 52px;
-  --hairline: rgba(24, 24, 27, 0.08);
-  --left-panel: #f5f6f7;
-  --main-panel: #fbfbfa;
-  --right-panel: #f8f8f7;
+  --hairline: var(--mc-color-border-hairline);
+  --left-panel: var(--mc-color-surface-left-panel);
+  --main-panel: var(--mc-color-surface-main-panel);
+  --right-panel: var(--mc-color-surface-right-panel);
 }
 
 * {
@@ -50,8 +48,18 @@ button {
   left: 0;
   right: 0;
   height: var(--titlebar-height);
-  border-bottom: 1px solid var(--hairline);
   -webkit-app-region: drag;
+}
+
+.window-toolbar::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: var(--left-panel-width);
+  height: 1px;
+  background: var(--hairline);
+  content: "";
+  pointer-events: none;
 }
 
 .side-panel,
@@ -112,7 +120,7 @@ button {
   height: 32px;
   padding: 0;
   place-items: center;
-  color: #6c6d70;
+  color: var(--mc-color-icon-muted);
   background: transparent;
   border: 0;
   border-radius: 8px;
@@ -131,12 +139,12 @@ button {
 }
 
 .panel-toggle:hover {
-  color: #26272a;
-  background: rgba(15, 15, 16, 0.055);
+  color: var(--mc-color-icon-default);
+  background: var(--mc-color-state-hover);
 }
 
 .panel-toggle:focus-visible {
-  outline: 2px solid rgba(45, 105, 210, 0.55);
+  outline: 2px solid var(--mc-color-focus-ring);
   outline-offset: 1px;
 }
 
@@ -150,6 +158,23 @@ button {
 
 .app-shell[data-left-open="false"] .panel-toggle--left {
   left: 84px;
+}
+
+.main-panel__title {
+  position: absolute;
+  top: 0;
+  left: 64px;
+  right: 64px;
+  overflow: hidden;
+  margin: 0;
+  color: var(--mc-color-text-strong);
+  font-size: 15px;
+  font-weight: 650;
+  line-height: var(--titlebar-height);
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
 }
 
 .resize-handle {

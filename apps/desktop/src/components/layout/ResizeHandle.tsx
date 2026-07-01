@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useFrontendConfig } from "../../config/FrontendConfigProvider";
 
 interface ResizeHandleProps {
   side: "left" | "right";
@@ -6,6 +7,7 @@ interface ResizeHandleProps {
 }
 
 export function ResizeHandle({ side, onResize }: ResizeHandleProps) {
+  const { t } = useFrontendConfig();
   const startX = useRef(0);
   const [dragging, setDragging] = useState(false);
 
@@ -37,7 +39,7 @@ export function ResizeHandle({ side, onResize }: ResizeHandleProps) {
     <div
       className={`resize-handle resize-handle--${side}`}
       role="separator"
-      aria-label={`调整${side === "left" ? "左" : "右"}侧栏宽度`}
+      aria-label={side === "left" ? t("app.resizeLeftSidebar") : t("app.resizeRightSidebar")}
       aria-orientation="vertical"
       onPointerDown={(event) => {
         event.preventDefault();

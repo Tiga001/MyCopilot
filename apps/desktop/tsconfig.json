@@ -11,11 +11,16 @@
     "forceConsistentCasingInFileNames": true,
     "module": "ESNext",
     "moduleResolution": "Bundler",
+    "baseUrl": ".",
+    "paths": {
+      "@agent": ["../../agent/typescript/src/index.ts"],
+      "@agent/*": ["../../agent/typescript/src/*"]
+    },
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
     "jsx": "react-jsx"
   },
-  "include": ["src"],
+  "include": ["src", "../../agent/typescript/src"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

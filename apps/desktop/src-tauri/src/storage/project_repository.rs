@@ -1,0 +1,70 @@
+use crate::storage::models::ProjectRecord;
+use crate::storage::now_ms;
+use rusqlite::{params, Connection};
+
+pub fn list_projects(connection: &Connection) -> rusqlite::Result<Vec<ProjectRecord>> {
+    let mut statement = connection.prepare(
+        "
+        SELECT id, name, path, created_at
+        FROM projects
+        ORDER BY created_at ASC
+        ",
+    )?;
+
+    let projects = statement
+        .query_map([], |row| {
+            Ok(ProjectRecord {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                path: row.get(2)?,
+                created_at: row.get(3)?,
+            })
+        })?
+        .collect();
+
+    projects
+}
+
+pub fn save_project(connection: &Connection, project: ProjectRecord) -> rusqlite::Result<()> {
+    let timestamp = now_ms();
+
+    connection.execute(
+        "
+        INSERT INTO projects (id, name, path, created_at, updated_at)
+        VALUES (?1, ?2, ?3, ?4, ?5)
+        ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            path = excluded.path,
+            updated_at = excluded.updated_at
+        ",
+        params![
+            &project.id,
+            &project.name,
+            &project.path,
+            project.created_at,
+            timestamp
+        ],
+    )?;
+
+    Ok(())
+}
+
+pub fn delete_project(connection: &Connection, project_id: &str) -> rusqlite::Result<()> {
+    connection.execute(
+        "
+        DELETE FROM messages
+        WHERE conversation_id IN (
+            SELECT id
+            FROM conversations
+            WHERE project_id = ?1
+        )
+        ",
+        params![project_id],
+    )?;
+    connection.execute(
+        "DELETE FROM conversations WHERE project_id = ?1",
+        params![project_id],
+    )?;
+    connection.execute("DELETE FROM projects WHERE id = ?1", params![project_id])?;
+    Ok(())
+}

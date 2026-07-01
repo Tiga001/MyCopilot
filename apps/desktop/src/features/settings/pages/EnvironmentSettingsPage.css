@@ -1,0 +1,219 @@
+.environment-settings-page {
+  width: min(100%, 1040px);
+  color: var(--mc-color-text-primary);
+}
+
+.environment-settings-page h1 {
+  margin: 0;
+  color: var(--mc-color-text-strong);
+  font-size: var(--mc-font-size-configuration-title);
+  font-weight: 760;
+  letter-spacing: -0.03em;
+  line-height: 1.2;
+}
+
+.environment-projects {
+  margin-top: 130px;
+}
+
+.environment-projects__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.environment-projects__header h2 {
+  margin: 0;
+  color: var(--mc-color-text-strong);
+  font-size: var(--mc-font-size-configuration-heading);
+  font-weight: 720;
+  line-height: 1.3;
+}
+
+.environment-projects__add-button {
+  height: 46px;
+  padding: 0 18px;
+  color: var(--mc-color-text-primary);
+  background: var(--mc-color-surface-muted);
+  border: 0;
+  border-radius: 14px;
+  font: inherit;
+  font-size: 18px;
+  font-weight: 720;
+  cursor: pointer;
+}
+
+.environment-projects__add-button:hover,
+.environment-project-card__delete:hover {
+  background: var(--mc-color-state-hover);
+}
+
+.environment-projects__add-button:focus-visible,
+.environment-project-card__delete:focus-visible {
+  outline: 2px solid var(--mc-color-focus-ring);
+  outline-offset: 2px;
+}
+
+.environment-projects__folder-input {
+  display: none;
+}
+
+.environment-projects__list {
+  display: grid;
+  margin-top: 30px;
+  gap: 18px;
+}
+
+.environment-project-card {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  align-items: center;
+  min-height: 78px;
+  padding: 0 20px 0 26px;
+  gap: 18px;
+  background: var(--mc-color-surface-elevated);
+  border: 1px solid var(--mc-color-border-subtle);
+  border-radius: 16px;
+}
+
+.environment-project-card > svg {
+  width: 22px;
+  height: 22px;
+  color: var(--mc-color-icon-muted);
+  stroke-width: 1.8;
+}
+
+.environment-project-card__name {
+  color: var(--mc-color-text-strong);
+  font-size: 20px;
+  font-weight: 560;
+  line-height: 1.3;
+}
+
+.environment-project-card__detail {
+  color: var(--mc-color-text-muted);
+  font-size: 18px;
+  line-height: 1.3;
+}
+
+.environment-project-card__delete {
+  display: grid;
+  width: 48px;
+  height: 42px;
+  padding: 0;
+  place-items: center;
+  color: var(--mc-color-icon-muted);
+  background: var(--mc-color-surface-muted);
+  border: 0;
+  border-radius: 14px;
+  cursor: pointer;
+}
+
+.environment-project-card__delete svg {
+  width: 19px;
+  height: 19px;
+  stroke-width: 2;
+}
+
+.environment-remove-dialog {
+  position: fixed;
+  z-index: 200;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(248, 248, 248, 0.45);
+  backdrop-filter: blur(3px);
+}
+
+.environment-remove-dialog__card {
+  position: relative;
+  width: min(640px, calc(100vw - 56px));
+  padding: 34px 36px 30px;
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid rgba(31, 35, 41, 0.08);
+  border-radius: 24px;
+  box-shadow:
+    0 20px 60px rgba(20, 23, 28, 0.16),
+    0 8px 24px rgba(20, 23, 28, 0.08);
+}
+
+.environment-remove-dialog__close {
+  position: absolute;
+  top: 18px;
+  right: 22px;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  color: var(--mc-color-icon-default);
+  background: transparent;
+  border: 0;
+  border-radius: 10px;
+  font-size: 34px;
+  font-weight: 300;
+  line-height: 30px;
+  cursor: pointer;
+}
+
+.environment-remove-dialog__close:hover {
+  background: var(--mc-color-state-hover);
+}
+
+.environment-remove-dialog h2 {
+  margin: 0;
+  color: var(--mc-color-text-strong);
+  font-size: 30px;
+  font-weight: 760;
+  letter-spacing: -0.03em;
+  line-height: 1.2;
+}
+
+.environment-remove-dialog p {
+  margin: 18px 0 0;
+  color: var(--mc-color-text-muted);
+  font-size: 21px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.environment-remove-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 30px;
+  gap: 22px;
+}
+
+.environment-remove-dialog__cancel,
+.environment-remove-dialog__confirm {
+  min-width: 92px;
+  height: 50px;
+  padding: 0 24px;
+  border: 0;
+  border-radius: 16px;
+  font: inherit;
+  font-size: 20px;
+  font-weight: 760;
+  cursor: pointer;
+}
+
+.environment-remove-dialog__cancel {
+  color: var(--mc-color-text-muted);
+  background: transparent;
+}
+
+.environment-remove-dialog__confirm {
+  color: #ff272e;
+  background: #ffe9ea;
+}
+
+.environment-remove-dialog__cancel:hover,
+.environment-remove-dialog__confirm:hover {
+  filter: brightness(0.98);
+}
+
+.environment-remove-dialog__close:focus-visible,
+.environment-remove-dialog__cancel:focus-visible,
+.environment-remove-dialog__confirm:focus-visible {
+  outline: 2px solid var(--mc-color-focus-ring);
+  outline-offset: 2px;
+}

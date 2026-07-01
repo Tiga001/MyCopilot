@@ -1,0 +1,77 @@
+.general-settings-page {
+  display: grid;
+  gap: 32px;
+}
+
+.general-settings-section {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 220px;
+  align-items: center;
+  padding: 20px 0;
+  gap: 28px;
+  border-top: 1px solid var(--mc-color-border-subtle);
+  border-bottom: 1px solid var(--mc-color-border-subtle);
+}
+
+.general-settings-section h2 {
+  margin: 0;
+  color: var(--mc-color-text-primary);
+  font-size: var(--mc-font-size-settings-section-title);
+  font-weight: 650;
+  line-height: 24px;
+}
+
+.general-settings-section p {
+  margin: 4px 0 0;
+  color: var(--mc-color-text-muted);
+  font-size: var(--mc-font-size-settings-nav);
+  line-height: 20px;
+}
+
+.general-settings-select {
+  display: block;
+}
+
+.general-settings-select select {
+  width: 100%;
+  height: 38px;
+  padding: 0 36px 0 12px;
+  color: var(--mc-color-text-primary);
+  background:
+    linear-gradient(45deg, transparent 50%, var(--mc-color-icon-muted) 50%) calc(100% - 18px) 16px / 6px 6px no-repeat,
+    linear-gradient(135deg, var(--mc-color-icon-muted) 50%, transparent 50%) calc(100% - 12px) 16px / 6px 6px no-repeat,
+    var(--mc-color-surface-muted);
+  border: 0;
+  border-radius: 10px;
+  outline: 0;
+  appearance: none;
+  font: inherit;
+  font-size: var(--mc-font-size-settings-nav);
+}
+
+.general-settings-select select:focus-visible {
+  outline: 2px solid var(--mc-color-focus-ring);
+  outline-offset: 2px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 760px) {
+  .general-settings-section {
+    grid-template-columns: 1fr;
+  }
+
+  .general-settings-select {
+    max-width: 240px;
+  }
+}

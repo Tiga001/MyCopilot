@@ -1,8 +1,12 @@
+import { useFrontendConfig } from "../../../config/FrontendConfigProvider";
+
 export function UsageBillingSettingsPage() {
+  const { t } = useFrontendConfig();
+
   return (
     <article className="settings-detail">
-      <h1>使用情况和计费</h1>
-      <p>这里先保留使用情况和计费页面的文字骨架。后续可以展示调用量、额度、账单和订阅状态。</p>
+      <h1>{t("settings.page.usageBilling")}</h1>
+      <p>{t("usageBilling.description")}</p>
     </article>
   );
 }

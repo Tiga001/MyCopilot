@@ -1,6 +1,8 @@
 import { useState } from "react";
 import type { LucideIcon } from "lucide-react";
 import { ArrowLeft, Gauge, Monitor, Search, Settings, Shield, Sun } from "lucide-react";
+import { useFrontendConfig } from "../../config/FrontendConfigProvider";
+import type { TranslationKey } from "../../config/frontendConfig";
 import { AppearanceSettingsPage } from "./pages/AppearanceSettingsPage";
 import { ConfigurationSettingsPage } from "./pages/ConfigurationSettingsPage";
 import { EnvironmentSettingsPage } from "./pages/EnvironmentSettingsPage";
@@ -16,23 +18,23 @@ type SettingsPageId = "general" | "appearance" | "configuration" | "usageBilling
 
 interface SettingsNavItem {
   id: SettingsPageId;
-  label: string;
+  labelKey: TranslationKey;
   icon: LucideIcon;
 }
 
-const SETTINGS_GROUPS: Array<{ title: string; items: SettingsNavItem[] }> = [
+const SETTINGS_GROUPS: Array<{ titleKey: TranslationKey; items: SettingsNavItem[] }> = [
   {
-    title: "个人",
+    titleKey: "settings.group.personal",
     items: [
-      { id: "general", label: "常规", icon: Settings },
-      { id: "appearance", label: "外观", icon: Sun },
-      { id: "configuration", label: "配置", icon: Shield },
-      { id: "usageBilling", label: "使用情况和计费", icon: Gauge },
+      { id: "general", labelKey: "settings.page.general", icon: Settings },
+      { id: "appearance", labelKey: "settings.page.appearance", icon: Sun },
+      { id: "configuration", labelKey: "settings.page.configuration", icon: Shield },
+      { id: "usageBilling", labelKey: "settings.page.usageBilling", icon: Gauge },
     ],
   },
   {
-    title: "编码",
-    items: [{ id: "environment", label: "环境", icon: Monitor }],
+    titleKey: "settings.group.coding",
+    items: [{ id: "environment", labelKey: "settings.page.environment", icon: Monitor }],
   },
 ];
 
@@ -63,22 +65,24 @@ interface SettingsNavigationProps {
 }
 
 function SettingsNavigation({ activePage, onBack, onSelectPage }: SettingsNavigationProps) {
+  const { t } = useFrontendConfig();
+
   return (
-    <aside className="settings-nav" aria-label="设置导航">
+    <aside className="settings-nav" aria-label={t("settings.navigation")}>
       <button className="settings-nav__back" type="button" onClick={onBack}>
         <ArrowLeft aria-hidden="true" />
-        <span>返回应用</span>
+        <span>{t("settings.backToApp")}</span>
       </button>
 
       <label className="settings-nav__search">
         <Search aria-hidden="true" />
-        <input type="search" placeholder="搜索设置..." aria-label="搜索设置" />
+        <input type="search" placeholder={t("settings.searchPlaceholder")} aria-label={t("settings.search")} />
       </label>
 
       <nav className="settings-nav__groups">
         {SETTINGS_GROUPS.map((group) => (
-          <section className="settings-nav__group" key={group.title} aria-labelledby={`settings-${group.title}`}>
-            <h2 id={`settings-${group.title}`}>{group.title}</h2>
+          <section className="settings-nav__group" key={group.titleKey} aria-labelledby={`settings-${group.titleKey}`}>
+            <h2 id={`settings-${group.titleKey}`}>{t(group.titleKey)}</h2>
             <div className="settings-nav__items">
               {group.items.map((item) => {
                 const Icon = item.icon;
@@ -91,7 +95,7 @@ function SettingsNavigation({ activePage, onBack, onSelectPage }: SettingsNaviga
                     onClick={() => onSelectPage(item.id)}
                   >
                     <Icon aria-hidden="true" />
-                    <span>{item.label}</span>
+                    <span>{t(item.labelKey)}</span>
                   </button>
                 );
               })}
@@ -99,13 +103,12 @@ function SettingsNavigation({ activePage, onBack, onSelectPage }: SettingsNaviga
           </section>
         ))}
       </nav>
-
-      <span className="settings-nav__update">更新</span>
     </aside>
   );
 }
 
 export function SettingsPage({ onBack }: SettingsPageProps) {
+  const { t } = useFrontendConfig();
   const [activePage, setActivePage] = useState<SettingsPageId>("general");
 
   return (
@@ -113,7 +116,7 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
       <div className="settings-page__drag-region" data-tauri-drag-region />
       <SettingsNavigation activePage={activePage} onBack={onBack} onSelectPage={setActivePage} />
 
-      <main className="settings-content" aria-label="设置内容">
+      <main className="settings-content" aria-label={t("settings.content")}>
         <div className="settings-content__inner">
           <SettingsContent activePage={activePage} />
         </div>
