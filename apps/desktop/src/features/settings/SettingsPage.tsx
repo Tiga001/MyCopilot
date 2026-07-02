@@ -1,9 +1,12 @@
 import { useState } from "react";
 import type { LucideIcon } from "lucide-react";
-import { ArrowLeft, Gauge, Monitor, Search, Settings, Shield, Sun } from "lucide-react";
+import { Archive, ArrowLeft, Gauge, Monitor, Search, Settings, Shield, Sun } from "lucide-react";
 import { useFrontendConfig } from "../../config/FrontendConfigProvider";
-import type { TranslationKey } from "../../config/frontendConfig";
+import type { AppProject } from "../../config/projectConfig";
+import type { TranslationKey } from "../../config/frontendTranslations";
+import type { ChatConversation } from "../chat/chatTypes";
 import { AppearanceSettingsPage } from "./pages/AppearanceSettingsPage";
+import { ArchivedConversationsSettingsPage } from "./pages/ArchivedConversationsSettingsPage";
 import { ConfigurationSettingsPage } from "./pages/ConfigurationSettingsPage";
 import { EnvironmentSettingsPage } from "./pages/EnvironmentSettingsPage";
 import { GeneralSettingsPage } from "./pages/GeneralSettingsPage";
@@ -11,10 +14,21 @@ import { UsageBillingSettingsPage } from "./pages/UsageBillingSettingsPage";
 import "./SettingsPage.css";
 
 interface SettingsPageProps {
+  conversations: ChatConversation[];
   onBack: () => void;
+  onDeleteAllArchivedConversations: () => void;
+  onDeleteConversation: (conversationId: string) => void;
+  onUnarchiveConversation: (conversationId: string) => void;
+  projects: AppProject[];
 }
 
-type SettingsPageId = "general" | "appearance" | "configuration" | "usageBilling" | "environment";
+type SettingsPageId =
+  | "general"
+  | "appearance"
+  | "configuration"
+  | "usageBilling"
+  | "environment"
+  | "archivedConversations";
 
 interface SettingsNavItem {
   id: SettingsPageId;
@@ -36,9 +50,27 @@ const SETTINGS_GROUPS: Array<{ titleKey: TranslationKey; items: SettingsNavItem[
     titleKey: "settings.group.coding",
     items: [{ id: "environment", labelKey: "settings.page.environment", icon: Monitor }],
   },
+  {
+    titleKey: "settings.group.archived",
+    items: [{ id: "archivedConversations", labelKey: "settings.page.archivedConversations", icon: Archive }],
+  },
 ];
 
-function SettingsContent({ activePage }: { activePage: SettingsPageId }) {
+function SettingsContent({
+  activePage,
+  conversations,
+  onDeleteAllArchivedConversations,
+  onDeleteConversation,
+  onUnarchiveConversation,
+  projects,
+}: {
+  activePage: SettingsPageId;
+  conversations: ChatConversation[];
+  onDeleteAllArchivedConversations: () => void;
+  onDeleteConversation: (conversationId: string) => void;
+  onUnarchiveConversation: (conversationId: string) => void;
+  projects: AppProject[];
+}) {
   if (activePage === "appearance") {
     return <AppearanceSettingsPage />;
   }
@@ -53,6 +85,18 @@ function SettingsContent({ activePage }: { activePage: SettingsPageId }) {
 
   if (activePage === "environment") {
     return <EnvironmentSettingsPage />;
+  }
+
+  if (activePage === "archivedConversations") {
+    return (
+      <ArchivedConversationsSettingsPage
+        conversations={conversations}
+        projects={projects}
+        onDeleteAllArchivedConversations={onDeleteAllArchivedConversations}
+        onDeleteConversation={onDeleteConversation}
+        onUnarchiveConversation={onUnarchiveConversation}
+      />
+    );
   }
 
   return <GeneralSettingsPage />;
@@ -107,7 +151,14 @@ function SettingsNavigation({ activePage, onBack, onSelectPage }: SettingsNaviga
   );
 }
 
-export function SettingsPage({ onBack }: SettingsPageProps) {
+export function SettingsPage({
+  conversations,
+  onBack,
+  onDeleteAllArchivedConversations,
+  onDeleteConversation,
+  onUnarchiveConversation,
+  projects,
+}: SettingsPageProps) {
   const { t } = useFrontendConfig();
   const [activePage, setActivePage] = useState<SettingsPageId>("general");
 
@@ -118,7 +169,14 @@ export function SettingsPage({ onBack }: SettingsPageProps) {
 
       <main className="settings-content" aria-label={t("settings.content")}>
         <div className="settings-content__inner">
-          <SettingsContent activePage={activePage} />
+          <SettingsContent
+            activePage={activePage}
+            conversations={conversations}
+            projects={projects}
+            onDeleteAllArchivedConversations={onDeleteAllArchivedConversations}
+            onDeleteConversation={onDeleteConversation}
+            onUnarchiveConversation={onUnarchiveConversation}
+          />
         </div>
       </main>
     </div>

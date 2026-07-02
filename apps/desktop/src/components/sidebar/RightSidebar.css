@@ -32,7 +32,7 @@
   color: var(--mc-color-icon-default);
   background: transparent;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--mc-radius-sm);
   cursor: pointer;
   transition: background-color 120ms ease;
 }
@@ -50,7 +50,7 @@
 .right-sidebar__icon-button svg {
   width: 19px;
   height: 19px;
-  stroke-width: 1.8;
+  stroke-width: var(--mc-icon-stroke-regular);
 }
 
 .right-sidebar__home {
@@ -73,7 +73,7 @@
   color: inherit;
   background: transparent;
   border: 1px solid var(--mc-color-border-default);
-  border-radius: 14px;
+  border-radius: var(--mc-radius-row);
   cursor: pointer;
   transition:
     background-color 120ms ease,
@@ -87,8 +87,8 @@
 
 .right-sidebar__tool-title {
   font-size: var(--mc-font-size-right-panel-title);
-  font-weight: 650;
-  line-height: 22px;
+  font-weight: var(--mc-font-weight-strong);
+  line-height: var(--mc-line-height-right-title);
 }
 
 .right-sidebar__tool-description {
@@ -96,7 +96,7 @@
   margin-top: 3px;
   color: var(--mc-color-text-muted);
   font-size: var(--mc-font-size-right-panel-description);
-  line-height: 18px;
+  line-height: var(--mc-line-height-right-description);
   text-overflow: ellipsis;
   white-space: nowrap;
 }

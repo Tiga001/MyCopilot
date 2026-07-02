@@ -27,6 +27,7 @@ pub(crate) struct LlmChatResponse {
 pub(crate) struct LlmMessage {
     pub role: LlmMessageRole,
     pub content: String,
+    pub images: Vec<LlmImage>,
     pub tool_call_id: Option<String>,
     pub tool_calls: Vec<LlmToolCall>,
     pub is_error: bool,
@@ -37,6 +38,7 @@ impl LlmMessage {
         Self {
             role,
             content: content.into(),
+            images: Vec::new(),
             tool_call_id: None,
             tool_calls: Vec::new(),
             is_error: false,
@@ -47,6 +49,7 @@ impl LlmMessage {
         Self {
             role: LlmMessageRole::Assistant,
             content: content.into(),
+            images: Vec::new(),
             tool_call_id: None,
             tool_calls,
             is_error: false,
@@ -61,6 +64,7 @@ impl LlmMessage {
         Self {
             role: LlmMessageRole::Tool,
             content: content.into(),
+            images: Vec::new(),
             tool_call_id: Some(tool_call_id.into()),
             tool_calls: Vec::new(),
             is_error,
@@ -74,6 +78,12 @@ pub(crate) enum LlmMessageRole {
     User,
     Assistant,
     Tool,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct LlmImage {
+    pub mime_type: String,
+    pub data_base64: String,
 }
 
 impl LlmMessageRole {
@@ -236,9 +246,11 @@ fn build_openai_messages(messages: &[LlmMessage]) -> Vec<Value> {
     messages
         .iter()
         .map(|message| match message.role {
-            LlmMessageRole::System | LlmMessageRole::User => {
-                json!({ "role": message.role.as_str(), "content": message.content })
-            }
+            LlmMessageRole::System => json!({ "role": "system", "content": message.content }),
+            LlmMessageRole::User => json!({
+                "role": "user",
+                "content": build_openai_user_content(message)
+            }),
             LlmMessageRole::Assistant => {
                 let mut object = Map::from_iter([(
                     "role".to_string(),
@@ -269,6 +281,30 @@ fn build_openai_messages(messages: &[LlmMessage]) -> Vec<Value> {
             }),
         })
         .collect()
+}
+
+fn build_openai_user_content(message: &LlmMessage) -> Value {
+    if message.images.is_empty() {
+        return json!(message.content);
+    }
+
+    let mut parts = Vec::new();
+    if !message.content.trim().is_empty() {
+        parts.push(json!({
+            "type": "text",
+            "text": message.content
+        }));
+    }
+    parts.extend(message.images.iter().map(|image| {
+        json!({
+            "type": "image_url",
+            "image_url": {
+                "url": format!("data:{};base64,{}", image.mime_type, image.data_base64)
+            }
+        })
+    }));
+
+    Value::Array(parts)
 }
 
 fn build_openai_tools(tools: &[AgentToolDefinition]) -> Vec<Value> {
@@ -310,11 +346,23 @@ fn split_anthropic_messages(messages: &[LlmMessage]) -> (Option<String>, Vec<Val
     for message in messages {
         match message.role {
             LlmMessageRole::System => system_parts.push(message.content.as_str()),
-            LlmMessageRole::User => push_anthropic_message(
-                &mut chat_messages,
-                "user",
-                vec![json!({ "type": "text", "text": message.content })],
-            ),
+            LlmMessageRole::User => {
+                let mut blocks = Vec::new();
+                if !message.content.trim().is_empty() {
+                    blocks.push(json!({ "type": "text", "text": message.content }));
+                }
+                blocks.extend(message.images.iter().map(|image| {
+                    json!({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": image.mime_type,
+                            "data": image.data_base64
+                        }
+                    })
+                }));
+                push_anthropic_message(&mut chat_messages, "user", blocks);
+            }
             LlmMessageRole::Assistant => {
                 let mut blocks = Vec::new();
                 if !message.content.trim().is_empty() {

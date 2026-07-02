@@ -1,25 +1,17 @@
 import { NotebookText, Trash2 } from "lucide-react";
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { useFrontendConfig } from "../../../config/FrontendConfigProvider";
 import { useProjectSettings } from "../../../config/ProjectSettingsProvider";
-import { getFolderNameFromFileList } from "../../../config/projectConfig";
 import type { AppProject } from "../../../config/projectConfig";
 import "./EnvironmentSettingsPage.css";
 
 export function EnvironmentSettingsPage() {
   const { t } = useFrontendConfig();
-  const { addProject, deleteProject, projects } = useProjectSettings();
-  const folderInputRef = useRef<HTMLInputElement>(null);
+  const { deleteProject, projects, selectProjectDirectory } = useProjectSettings();
   const [pendingDeleteProject, setPendingDeleteProject] = useState<AppProject | null>(null);
 
   const addProjectFromFolder = () => {
-    folderInputRef.current?.click();
-  };
-
-  const handleFolderChange = (files: FileList | null) => {
-    const folderName = getFolderNameFromFileList(files);
-    if (!folderName) return;
-    addProject(folderName);
+    void selectProjectDirectory();
   };
 
   return (
@@ -32,19 +24,6 @@ export function EnvironmentSettingsPage() {
           <button className="environment-projects__add-button" type="button" onClick={addProjectFromFolder}>
             {t("environment.addProject")}
           </button>
-          <input
-            ref={folderInputRef}
-            className="environment-projects__folder-input"
-            type="file"
-            multiple
-            aria-label={t("environment.folderInput")}
-            onClick={(event) => {
-              event.currentTarget.setAttribute("webkitdirectory", "");
-              event.currentTarget.setAttribute("directory", "");
-              event.currentTarget.value = "";
-            }}
-            onChange={(event) => handleFolderChange(event.currentTarget.files)}
-          />
         </div>
 
         <div className="environment-projects__list">

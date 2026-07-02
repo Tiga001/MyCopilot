@@ -1,6 +1,8 @@
+mod attachments;
 mod generate_patch;
 mod git_diff;
 mod read_file;
+mod read_image;
 mod read_pdf;
 mod read_presentation;
 mod read_spreadsheet;
@@ -12,12 +14,15 @@ mod web_fetch;
 mod web_search;
 
 use crate::protocol::{
-    AgentError, AgentProposedAction, AgentResult, AgentRunContext, AgentSearchConfig,
-    AgentSearchMode, AgentToolCall, AgentToolDefinition, AgentToolResult,
+    AgentAttachmentLibraryContext, AgentAttachmentReference, AgentError, AgentProposedAction,
+    AgentResult, AgentRunContext, AgentSearchConfig, AgentSearchMode, AgentToolCall,
+    AgentToolDefinition, AgentToolResult,
 };
+use attachments::{AttachmentsListProjectTool, AttachmentsListTool};
 use generate_patch::{ApplyPatchTool, GeneratePatchTool};
 use git_diff::GitDiffTool;
 use read_file::ReadFileTool;
+use read_image::ReadImageTool;
 use read_pdf::ReadPdfTool;
 use read_presentation::ReadPresentationTool;
 use read_spreadsheet::ReadSpreadsheetTool;
@@ -67,7 +72,10 @@ impl ToolRegistry {
         let mut registry = Self {
             tools: BTreeMap::new(),
         };
+        registry.register(AttachmentsListTool);
+        registry.register(AttachmentsListProjectTool);
         registry.register(ReadFileTool);
+        registry.register(ReadImageTool);
         registry.register(ReadPdfTool);
         registry.register(ReadWordTool);
         registry.register(ReadPresentationTool);
@@ -153,6 +161,7 @@ fn tavily_api_key(search_config: Option<&AgentSearchConfig>) -> Option<String> {
 
 pub struct ToolExecutionContext {
     workspace_root: Option<PathBuf>,
+    attachment_library: Option<AgentAttachmentLibraryContext>,
 }
 
 impl ToolExecutionContext {
@@ -161,8 +170,12 @@ impl ToolExecutionContext {
             .and_then(|context| context.workspace.as_ref())
             .and_then(|workspace| workspace.root_path.as_ref())
             .map(PathBuf::from);
+        let attachment_library = context.and_then(|context| context.attachment_library.clone());
 
-        Self { workspace_root }
+        Self {
+            workspace_root,
+            attachment_library,
+        }
     }
 
     pub(super) fn workspace_root(&self) -> AgentResult<PathBuf> {
@@ -183,6 +196,10 @@ impl ToolExecutionContext {
     }
 
     pub(super) fn resolve_existing_path(&self, input_path: &str) -> AgentResult<PathBuf> {
+        if is_attachment_path(input_path) {
+            return self.resolve_attachment_path(input_path);
+        }
+
         let root = self.workspace_root()?;
         let relative = clean_relative_path(input_path)?;
         let resolved = root.join(relative);
@@ -197,9 +214,100 @@ impl ToolExecutionContext {
         Ok(canonical)
     }
 
+    pub(super) fn display_path(&self, input_path: &str, file_path: &Path) -> AgentResult<String> {
+        if is_attachment_path(input_path) {
+            return self
+                .attachment_reference_for_path(input_path)
+                .map(|reference| reference.read_path.clone());
+        }
+
+        Ok(relative_display(&self.workspace_root()?, file_path))
+    }
+
+    pub(super) fn conversation_attachments(&self) -> &[AgentAttachmentReference] {
+        self.attachment_library
+            .as_ref()
+            .map(|library| library.conversation_attachments.as_slice())
+            .unwrap_or(&[])
+    }
+
+    pub(super) fn project_attachments(&self) -> &[AgentAttachmentReference] {
+        self.attachment_library
+            .as_ref()
+            .map(|library| library.project_attachments.as_slice())
+            .unwrap_or(&[])
+    }
+
     pub(super) fn validate_relative_path_for_git(&self, input_path: &str) -> AgentResult<PathBuf> {
         clean_relative_path(input_path)
     }
+
+    fn resolve_attachment_path(&self, input_path: &str) -> AgentResult<PathBuf> {
+        let reference = self.attachment_reference_for_path(input_path)?;
+        let library = self.attachment_library.as_ref().ok_or_else(|| {
+            AgentError::new("当前对话没有可用的附件库，无法读取 @attachments 路径。")
+        })?;
+        let root_path = library
+            .root_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .ok_or_else(|| AgentError::new("附件库根目录不可用。"))?;
+        let root = PathBuf::from(root_path)
+            .canonicalize()
+            .map_err(|error| AgentError::new(format!("附件库目录不可访问：{error}")))?;
+        if !root.is_dir() {
+            return Err(AgentError::new("附件库根目录不是目录。"));
+        }
+
+        let relative = clean_relative_path(&reference.storage_rel_path)?;
+        let canonical = root
+            .join(relative)
+            .canonicalize()
+            .map_err(|error| AgentError::new(format!("附件文件不可访问：{error}")))?;
+
+        if !canonical.starts_with(&root) {
+            return Err(AgentError::new("附件路径必须位于附件库目录内。"));
+        }
+
+        Ok(canonical)
+    }
+
+    fn attachment_reference_for_path(
+        &self,
+        input_path: &str,
+    ) -> AgentResult<&AgentAttachmentReference> {
+        let attachment_id = attachment_id_from_path(input_path)?;
+        let library = self.attachment_library.as_ref().ok_or_else(|| {
+            AgentError::new("当前对话没有可用的附件库，无法读取 @attachments 路径。")
+        })?;
+
+        library
+            .conversation_attachments
+            .iter()
+            .chain(library.project_attachments.iter())
+            .find(|attachment| attachment.id == attachment_id)
+            .ok_or_else(|| AgentError::new(format!("未找到附件：{attachment_id}")))
+    }
+}
+
+fn is_attachment_path(input_path: &str) -> bool {
+    input_path.trim().starts_with("@attachments/")
+}
+
+fn attachment_id_from_path(input_path: &str) -> AgentResult<String> {
+    let trimmed = input_path.trim();
+    let remainder = trimmed
+        .strip_prefix("@attachments/")
+        .ok_or_else(|| AgentError::new("附件路径必须以 @attachments/ 开头。"))?;
+    let attachment_id = remainder
+        .split('/')
+        .next()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| AgentError::new("附件路径缺少附件 id。"))?;
+
+    Ok(attachment_id.to_string())
 }
 
 pub(super) trait AgentTool: Send + Sync {
@@ -348,7 +456,6 @@ pub(super) fn resolve_document_path(
     input_path: &str,
     allowed_extensions: &[&str],
 ) -> AgentResult<ResolvedDocumentPath> {
-    let root = context.workspace_root()?;
     let file_path = context.resolve_existing_path(input_path)?;
     let metadata = fs::metadata(&file_path)
         .map_err(|error| AgentError::new(format!("读取文件元数据失败：{error}")))?;
@@ -385,7 +492,7 @@ pub(super) fn resolve_document_path(
         )));
     }
 
-    let relative_path = relative_display(&root, &file_path);
+    let relative_path = context.display_path(input_path, &file_path)?;
 
     Ok(ResolvedDocumentPath {
         file_path,
@@ -540,8 +647,10 @@ fn should_exclude_name(name: &str) -> bool {
 mod tests {
     use super::*;
     use crate::protocol::{
-        AgentRunContext, AgentSearchConfig, AgentSearchMode, AgentWorkspaceContext,
+        AgentAttachmentLibraryContext, AgentAttachmentReference, AgentInputAttachmentKind,
+        AgentRunContext, AgentSearchConfig, AgentSearchMode, AgentToolCall, AgentWorkspaceContext,
     };
+    use serde_json::json;
     use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -602,6 +711,126 @@ mod tests {
         assert!(definition.requires_approval);
     }
 
+    #[test]
+    fn lists_and_reads_attachment_paths() {
+        let fixture = TestWorkspace::new();
+        let attachment_root = fixture.root.join("attachments");
+        let storage_rel_path = PathBuf::from("conversations/c1/m1/a1/notes.txt");
+        let attachment_path = attachment_root.join(&storage_rel_path);
+        fs::create_dir_all(attachment_path.parent().unwrap()).unwrap();
+        fs::write(&attachment_path, "hello from attachment").unwrap();
+
+        let context = ToolExecutionContext::from_run_context(Some(&AgentRunContext {
+            conversation_id: Some("c1".to_string()),
+            project_id: Some("p1".to_string()),
+            workspace: None,
+            attachment_library: Some(AgentAttachmentLibraryContext {
+                root_path: Some(attachment_root.to_string_lossy().to_string()),
+                conversation_id: Some("c1".to_string()),
+                project_id: Some("p1".to_string()),
+                conversation_attachments: vec![AgentAttachmentReference {
+                    id: "a1".to_string(),
+                    conversation_id: "c1".to_string(),
+                    message_id: "m1".to_string(),
+                    project_id: Some("p1".to_string()),
+                    kind: AgentInputAttachmentKind::File,
+                    name: "notes.txt".to_string(),
+                    mime_type: Some("text/plain".to_string()),
+                    size_bytes: 21,
+                    read_path: "@attachments/a1/notes.txt".to_string(),
+                    storage_rel_path: "conversations/c1/m1/a1/notes.txt".to_string(),
+                    created_at: 1,
+                }],
+                project_attachments: Vec::new(),
+            }),
+        }));
+        let registry = ToolRegistry::read_only_defaults_with_search(None);
+
+        let list_result = registry.execute(
+            &context,
+            &AgentToolCall {
+                id: "call-list".to_string(),
+                tool: "attachments_list".to_string(),
+                args: json!({}),
+                approval_status: crate::protocol::AgentApprovalStatus::NotRequired,
+                reason: None,
+            },
+        );
+        assert!(list_result.ok, "{:?}", list_result.error);
+        assert_eq!(
+            list_result.result.as_ref().unwrap()["attachments"][0]["readPath"],
+            "@attachments/a1/notes.txt"
+        );
+
+        let read_result = registry.execute(
+            &context,
+            &AgentToolCall {
+                id: "call-read".to_string(),
+                tool: "read_file".to_string(),
+                args: json!({ "path": "@attachments/a1/notes.txt" }),
+                approval_status: crate::protocol::AgentApprovalStatus::NotRequired,
+                reason: None,
+            },
+        );
+        assert!(read_result.ok, "{:?}", read_result.error);
+        assert_eq!(
+            read_result.result.as_ref().unwrap()["content"],
+            "hello from attachment"
+        );
+    }
+
+    #[test]
+    fn read_image_reads_attachment_visual_payload() {
+        let fixture = TestWorkspace::new();
+        let attachment_root = fixture.root.join("attachments");
+        let storage_rel_path = PathBuf::from("conversations/c1/m1/image1/pixel.png");
+        let attachment_path = attachment_root.join(&storage_rel_path);
+        fs::create_dir_all(attachment_path.parent().unwrap()).unwrap();
+        fs::write(&attachment_path, b"not-a-real-png-but-valid-tool-bytes").unwrap();
+
+        let context = ToolExecutionContext::from_run_context(Some(&AgentRunContext {
+            conversation_id: Some("c1".to_string()),
+            project_id: Some("p1".to_string()),
+            workspace: None,
+            attachment_library: Some(AgentAttachmentLibraryContext {
+                root_path: Some(attachment_root.to_string_lossy().to_string()),
+                conversation_id: Some("c1".to_string()),
+                project_id: Some("p1".to_string()),
+                conversation_attachments: vec![AgentAttachmentReference {
+                    id: "image1".to_string(),
+                    conversation_id: "c1".to_string(),
+                    message_id: "m1".to_string(),
+                    project_id: Some("p1".to_string()),
+                    kind: AgentInputAttachmentKind::Image,
+                    name: "pixel.png".to_string(),
+                    mime_type: Some("image/png".to_string()),
+                    size_bytes: 31,
+                    read_path: "@attachments/image1/pixel.png".to_string(),
+                    storage_rel_path: "conversations/c1/m1/image1/pixel.png".to_string(),
+                    created_at: 1,
+                }],
+                project_attachments: Vec::new(),
+            }),
+        }));
+        let registry = ToolRegistry::read_only_defaults_with_search(None);
+        let result = registry.execute(
+            &context,
+            &AgentToolCall {
+                id: "call-image".to_string(),
+                tool: "read_image".to_string(),
+                args: json!({ "path": "@attachments/image1/pixel.png" }),
+                approval_status: crate::protocol::AgentApprovalStatus::NotRequired,
+                reason: None,
+            },
+        );
+
+        assert!(result.ok, "{:?}", result.error);
+        let value = result.result.as_ref().unwrap();
+        assert_eq!(value["path"], "@attachments/image1/pixel.png");
+        assert_eq!(value["mimeType"], "image/png");
+        assert!(value["image"]["dataBase64"].as_str().unwrap().len() > 10);
+    }
+
     struct TestWorkspace {
         root: PathBuf,
     }
@@ -624,6 +853,7 @@ mod tests {
                     display_name: Some("test".to_string()),
                     root_path: Some(self.root.to_string_lossy().to_string()),
                 }),
+                attachment_library: None,
             }))
         }
     }

@@ -21,8 +21,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            commands::agent::agent_send_chat,
-            commands::agent::agent_start_chat,
+            commands::agent::agent_start_conversation_turn,
+            commands::agent_attachments::select_agent_input_attachments,
             commands::agent_actions::agent_list_pending_actions,
             commands::agent_actions::agent_approve_action,
             commands::agent_actions::agent_reject_action,
@@ -31,10 +31,13 @@ pub fn run() {
             storage::commands::load_model_settings,
             storage::commands::save_model_settings,
             storage::commands::load_projects,
+            storage::commands::select_project_directory,
             storage::commands::save_project,
             storage::commands::delete_project,
+            storage::commands::show_project_in_folder,
             storage::commands::load_conversations,
             storage::commands::save_conversation,
+            storage::commands::delete_conversation,
         ])
         .run(tauri::generate_context!())
         .expect("error while running MyCopilot");

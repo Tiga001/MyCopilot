@@ -4,58 +4,22 @@ import {
   cancelAgentActionWithInvoker,
   listPendingAgentActionsWithInvoker,
   rejectAgentActionWithInvoker,
-  sendAgentChatWithInvoker,
-  startAgentChatWithInvoker,
+  startAgentConversationTurnWithInvoker,
 } from "@agent";
 import type {
   AgentActionExecutionOutput,
-  AgentChatMessage,
-  AgentChatOutput,
-  AgentRunContext,
-  AgentStartChatOutput,
+  AgentConversationTurnInput,
+  AgentConversationTurnOutput,
   PendingAgentActionSnapshot,
 } from "@agent";
-import type { ChatMessage } from "../chat/chatTypes";
 
-interface SendAgentMessageInput {
-  apiUrl: string;
-  apiToken: string;
-  model: string;
-  maxTokens?: number;
-  context?: AgentRunContext;
-  messages: ChatMessage[];
-}
+export type StartConversationTurnInput = AgentConversationTurnInput;
+export type StartConversationTurnOutput = AgentConversationTurnOutput;
 
-export async function sendAgentMessage(input: SendAgentMessageInput): Promise<string> {
-  const output = await sendAgentMessageOutput(input);
-
-  return output.content;
-}
-
-export async function sendAgentMessageOutput(input: SendAgentMessageInput): Promise<AgentChatOutput> {
-  return sendAgentChatWithInvoker(invoke, buildAgentChatInput(input));
-}
-
-export async function startAgentMessage(input: SendAgentMessageInput): Promise<AgentStartChatOutput> {
-  return startAgentChatWithInvoker(invoke, buildAgentChatInput(input));
-}
-
-function buildAgentChatInput(input: SendAgentMessageInput) {
-  const messages: AgentChatMessage[] = input.messages
-    .filter((message) => message.status !== "pending" && message.content.trim().length > 0)
-    .map((message) => ({
-      role: message.role,
-      content: message.content,
-    }));
-
-  return {
-    apiUrl: input.apiUrl,
-    apiToken: input.apiToken,
-    model: input.model,
-    maxTokens: input.maxTokens,
-    context: input.context,
-    messages,
-  };
+export async function startConversationTurn(
+  input: StartConversationTurnInput,
+): Promise<StartConversationTurnOutput> {
+  return startAgentConversationTurnWithInvoker(invoke, input);
 }
 
 export async function listPendingAgentActions(): Promise<PendingAgentActionSnapshot[]> {

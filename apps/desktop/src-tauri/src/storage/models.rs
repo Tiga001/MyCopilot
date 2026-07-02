@@ -30,6 +30,7 @@ pub struct ProjectRecord {
     pub name: String,
     pub path: Option<String>,
     pub created_at: i64,
+    pub pinned_at: Option<i64>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -44,6 +45,21 @@ pub struct ChatMessageRecord {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
+pub struct AttachmentRecord {
+    pub id: String,
+    pub conversation_id: String,
+    pub message_id: String,
+    pub project_id: Option<String>,
+    pub kind: String,
+    pub original_name: String,
+    pub mime_type: Option<String>,
+    pub size_bytes: u64,
+    pub storage_rel_path: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct ChatConversationRecord {
     pub id: String,
     pub project_id: Option<String>,
@@ -52,6 +68,8 @@ pub struct ChatConversationRecord {
     pub messages: Vec<ChatMessageRecord>,
     pub created_at: i64,
     pub updated_at: i64,
+    pub pinned_at: Option<i64>,
+    pub archived_at: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]

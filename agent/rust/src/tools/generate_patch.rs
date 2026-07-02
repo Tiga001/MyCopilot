@@ -210,17 +210,10 @@ fn patch_input_schema() -> Value {
         "type": "object",
         "properties": {
             "filePath": { "type": "string", "description": "Workspace-relative file path to modify or create." },
-            "path": { "type": "string", "description": "Alias for filePath." },
             "patch": { "type": "string", "description": "Unified diff for exactly this file." },
-            "diff": { "type": "string", "description": "Alias for patch." },
             "summary": { "type": "string", "description": "Short human-readable summary of the proposed change." }
         },
-        "anyOf": [
-            { "required": ["filePath", "patch"] },
-            { "required": ["filePath", "diff"] },
-            { "required": ["path", "patch"] },
-            { "required": ["path", "diff"] }
-        ]
+        "required": ["filePath", "patch"]
     })
 }
 

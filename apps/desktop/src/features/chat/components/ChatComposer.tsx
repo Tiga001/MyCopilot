@@ -17,9 +17,14 @@ import {
 import { useFrontendConfig } from "../../../config/FrontendConfigProvider";
 import { useModelSettings } from "../../../config/ModelSettingsProvider";
 import { useProjectSettings } from "../../../config/ProjectSettingsProvider";
-import type { TranslationKey } from "../../../config/frontendConfig";
+import type { TranslationKey } from "../../../config/frontendTranslations";
 import { modelConfig } from "../../../config/modelConfig";
-import { getFolderNameFromFileList } from "../../../config/projectConfig";
+import {
+  buildAgentInputAttachments,
+  createAttachmentSummary,
+  selectComposerAttachments,
+} from "../chatAttachments";
+import type { ComposerAttachment, ComposerAttachmentKind } from "../chatAttachments";
 import type { ChatSubmitOptions } from "../chatTypes";
 import "./ChatComposer.css";
 
@@ -203,30 +208,12 @@ const READABLE_FILE_ACCEPT = [
   ".astro",
 ].join(",");
 
-type ComposerAttachmentKind = "file" | "image";
-
-interface ComposerAttachment {
-  id: string;
-  kind: ComposerAttachmentKind;
-  name: string;
-  previewUrl?: string;
-}
-
 interface ChatComposerProps {
   defaultProjectId?: string | null;
   isGenerating?: boolean;
   onSubmitMessage?: (message: string, options: ChatSubmitOptions) => void;
   onStopGenerating?: () => void;
   showProjectSelector?: boolean;
-}
-
-function createAttachmentId() {
-  return `attachment-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function createAttachmentSummary(attachments: ComposerAttachment[]) {
-  if (attachments.length === 0) return "";
-  return `附件：${attachments.map((attachment) => attachment.name).join("、")}`;
 }
 
 export function ChatComposer({
@@ -238,12 +225,9 @@ export function ChatComposer({
 }: ChatComposerProps) {
   const { t } = useFrontendConfig();
   const { enabledModels } = useModelSettings();
-  const { addProject, projects } = useProjectSettings();
+  const { projects, selectProjectDirectory } = useProjectSettings();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const attachmentsRef = useRef<ComposerAttachment[]>([]);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const imageInputRef = useRef<HTMLInputElement>(null);
-  const projectFolderInputRef = useRef<HTMLInputElement>(null);
   const [message, setMessage] = useState("");
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [isAttachmentMenuOpen, setIsAttachmentMenuOpen] = useState(false);
@@ -251,6 +235,7 @@ export function ChatComposer({
   const [isPermissionMenuOpen, setIsPermissionMenuOpen] = useState(false);
   const [isModelMenuOpen, setIsModelMenuOpen] = useState(false);
   const [isProjectMenuOpen, setIsProjectMenuOpen] = useState(false);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [projectSearch, setProjectSearch] = useState("");
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(defaultProjectId);
   const [selectedModelId, setSelectedModelId] = useState<string>(modelConfig.defaults.selectedModelId);
@@ -314,14 +299,24 @@ export function ChatComposer({
     };
   }, []);
 
-  const submitMessage = () => {
+  const submitMessage = async () => {
     if (isGenerating || !canSend) return;
 
     const trimmedMessage = message.trim();
     const attachmentSummary = createAttachmentSummary(attachments);
     const messageContent = [trimmedMessage, attachmentSummary].filter(Boolean).join("\n\n");
+    let inputAttachments: ChatSubmitOptions["attachments"];
+
+    try {
+      inputAttachments = await buildAgentInputAttachments(attachments);
+      setAttachmentError(null);
+    } catch (error) {
+      setAttachmentError(error instanceof Error ? error.message : String(error));
+      return;
+    }
 
     onSubmitMessage?.(messageContent, {
+      attachments: inputAttachments,
       modelId: selectedModel?.id ?? selectedModelId,
       projectId: selectedProject?.id ?? null,
     });
@@ -357,15 +352,16 @@ export function ChatComposer({
     );
   };
 
-  const addAttachments = (files: FileList | null, kind: ComposerAttachmentKind) => {
-    if (!files || files.length === 0) return;
-
-    const nextAttachments = Array.from(files).map((file) => ({
-      id: createAttachmentId(),
-      kind,
-      name: file.name,
-      previewUrl: kind === "image" ? URL.createObjectURL(file) : undefined,
-    }));
+  const addAttachments = async (kind: ComposerAttachmentKind) => {
+    let nextAttachments: ComposerAttachment[];
+    try {
+      nextAttachments = await selectComposerAttachments(kind);
+      setAttachmentError(null);
+    } catch (error) {
+      setAttachmentError(error instanceof Error ? error.message : String(error));
+      setIsAttachmentMenuOpen(false);
+      return;
+    }
 
     if (nextAttachments.length === 0) {
       setIsAttachmentMenuOpen(false);
@@ -373,14 +369,14 @@ export function ChatComposer({
     }
 
     setAttachments((currentAttachments) => [...currentAttachments, ...nextAttachments]);
+    setAttachmentError(null);
     setIsAttachmentMenuOpen(false);
   };
 
-  const handleNewProjectFromFolder = (files: FileList | null) => {
-    const folderName = getFolderNameFromFileList(files);
-    if (!folderName) return;
+  const handleSelectProjectDirectory = async () => {
+    const project = await selectProjectDirectory();
+    if (!project) return;
 
-    const project = addProject(folderName);
     setSelectedProjectId(project.id);
     setProjectSearch("");
     setIsProjectMenuOpen(false);
@@ -438,6 +434,7 @@ export function ChatComposer({
       {hasUnsupportedImageAttachment && (
         <p className="chat-composer__warning">{t("chat.unsupportedImageWarning")}</p>
       )}
+      {attachmentError && <p className="chat-composer__warning">{attachmentError}</p>}
 
       <div className="chat-composer__toolbar">
         <div className="composer-add-picker">
@@ -460,42 +457,17 @@ export function ChatComposer({
           {isAttachmentMenuOpen && (
             <div className="composer-add-menu" role="menu" aria-label={t("chat.addMenuTitle")}>
               <p>{t("chat.addMenuTitle")}</p>
-              <button type="button" role="menuitem" onClick={() => fileInputRef.current?.click()}>
+              <button type="button" role="menuitem" onClick={() => void addAttachments("file")}>
                 <Paperclip aria-hidden="true" />
                 <span>{t("chat.addFile")}</span>
               </button>
-              <button type="button" role="menuitem" onClick={() => imageInputRef.current?.click()}>
+              <button type="button" role="menuitem" onClick={() => void addAttachments("image")}>
                 <ImageIcon aria-hidden="true" />
                 <span>{t("chat.addImage")}</span>
               </button>
             </div>
           )}
         </div>
-
-        <input
-          ref={fileInputRef}
-          className="composer-hidden-file-input"
-          type="file"
-          accept={READABLE_FILE_ACCEPT}
-          multiple
-          aria-label={t("chat.addFile")}
-          onChange={(event) => {
-            addAttachments(event.currentTarget.files, "file");
-            event.currentTarget.value = "";
-          }}
-        />
-        <input
-          ref={imageInputRef}
-          className="composer-hidden-file-input"
-          type="file"
-          accept="image/*,.apng,.avif,.bmp,.gif,.heic,.heif,.ico,.jpg,.jpeg,.png,.svg,.tif,.tiff,.webp"
-          multiple
-          aria-label={t("chat.addImage")}
-          onChange={(event) => {
-            addAttachments(event.currentTarget.files, "image");
-            event.currentTarget.value = "";
-          }}
-        />
 
         <div className="composer-permission-picker">
           <button
@@ -686,7 +658,7 @@ export function ChatComposer({
                   className="composer-project-command"
                   type="button"
                   onClick={() => {
-                    projectFolderInputRef.current?.click();
+                    void handleSelectProjectDirectory();
                   }}
                 >
                   <Plus aria-hidden="true" />
@@ -709,19 +681,6 @@ export function ChatComposer({
               </div>
             )}
 
-            <input
-              ref={projectFolderInputRef}
-              className="composer-project-folder-input"
-              type="file"
-              multiple
-              aria-label={t("project.folderInput")}
-              onClick={(event) => {
-                event.currentTarget.setAttribute("webkitdirectory", "");
-                event.currentTarget.setAttribute("directory", "");
-                event.currentTarget.value = "";
-              }}
-              onChange={(event) => handleNewProjectFromFolder(event.currentTarget.files)}
-            />
           </div>
         </div>
       )}

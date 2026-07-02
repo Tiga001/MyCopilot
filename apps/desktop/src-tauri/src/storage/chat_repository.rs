@@ -1,14 +1,17 @@
 use crate::storage::models::{ChatConversationRecord, ChatMessageRecord};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 
 pub fn list_conversations(
     connection: &Connection,
 ) -> rusqlite::Result<Vec<ChatConversationRecord>> {
     let mut conversation_statement = connection.prepare(
         "
-        SELECT id, project_id, model_id, title, created_at, updated_at
+        SELECT id, project_id, model_id, title, created_at, updated_at, pinned_at, archived_at
         FROM conversations
-        ORDER BY updated_at DESC
+        ORDER BY
+            CASE WHEN pinned_at IS NULL THEN 1 ELSE 0 END ASC,
+            pinned_at DESC,
+            updated_at DESC
         ",
     )?;
 
@@ -22,6 +25,8 @@ pub fn list_conversations(
                 messages: Vec::new(),
                 created_at: row.get(4)?,
                 updated_at: row.get(5)?,
+                pinned_at: row.get(6)?,
+                archived_at: row.get(7)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -31,6 +36,42 @@ pub fn list_conversations(
     }
 
     Ok(conversations)
+}
+
+pub fn get_conversation(
+    connection: &Connection,
+    conversation_id: &str,
+) -> rusqlite::Result<Option<ChatConversationRecord>> {
+    let conversation = connection
+        .query_row(
+            "
+            SELECT id, project_id, model_id, title, created_at, updated_at, pinned_at, archived_at
+            FROM conversations
+            WHERE id = ?1
+            ",
+            params![conversation_id],
+            |row| {
+                Ok(ChatConversationRecord {
+                    id: row.get(0)?,
+                    project_id: row.get(1)?,
+                    model_id: row.get(2)?,
+                    title: row.get(3)?,
+                    messages: Vec::new(),
+                    created_at: row.get(4)?,
+                    updated_at: row.get(5)?,
+                    pinned_at: row.get(6)?,
+                    archived_at: row.get(7)?,
+                })
+            },
+        )
+        .optional()?;
+
+    let Some(mut conversation) = conversation else {
+        return Ok(None);
+    };
+
+    conversation.messages = list_messages(connection, conversation_id)?;
+    Ok(Some(conversation))
 }
 
 pub fn save_conversation(
@@ -47,14 +88,18 @@ pub fn save_conversation(
             model_id,
             title,
             created_at,
-            updated_at
+            updated_at,
+            pinned_at,
+            archived_at
         )
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
         ON CONFLICT(id) DO UPDATE SET
             project_id = excluded.project_id,
             model_id = excluded.model_id,
             title = excluded.title,
-            updated_at = excluded.updated_at
+            updated_at = excluded.updated_at,
+            pinned_at = excluded.pinned_at,
+            archived_at = excluded.archived_at
         ",
         params![
             &conversation.id,
@@ -62,7 +107,9 @@ pub fn save_conversation(
             &conversation.model_id,
             &conversation.title,
             conversation.created_at,
-            conversation.updated_at
+            conversation.updated_at,
+            conversation.pinned_at,
+            conversation.archived_at
         ],
     )?;
 
@@ -98,6 +145,41 @@ pub fn save_conversation(
     }
 
     transaction.commit()
+}
+
+pub fn delete_conversation(connection: &Connection, conversation_id: &str) -> rusqlite::Result<()> {
+    connection.execute(
+        "DELETE FROM conversations WHERE id = ?1",
+        params![conversation_id],
+    )?;
+    Ok(())
+}
+
+pub fn update_message_status_and_content(
+    connection: &Connection,
+    conversation_id: &str,
+    message_id: &str,
+    content: &str,
+    status: Option<&str>,
+    updated_at: i64,
+) -> rusqlite::Result<()> {
+    connection.execute(
+        "
+        UPDATE messages
+        SET content = ?1, status = ?2
+        WHERE conversation_id = ?3 AND id = ?4
+        ",
+        params![content, status, conversation_id, message_id],
+    )?;
+    connection.execute(
+        "
+        UPDATE conversations
+        SET updated_at = ?1
+        WHERE id = ?2
+        ",
+        params![updated_at, conversation_id],
+    )?;
+    Ok(())
 }
 
 fn list_messages(

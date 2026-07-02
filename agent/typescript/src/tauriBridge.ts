@@ -1,14 +1,14 @@
-import type { AgentChatInput, AgentChatOutput, AgentProposedAction } from "./protocol";
+import type {
+  AgentChatOutput,
+  AgentConversationTurnInput,
+  AgentConversationTurnOutput,
+  AgentProposedAction,
+} from "./protocol";
 
 export const AGENT_EVENT_NAME = "agent_event";
 
 export interface AgentCommandInvoker {
   <T>(command: string, args?: Record<string, unknown>): Promise<T>;
-}
-
-export interface AgentStartChatOutput {
-  runId: string;
-  eventName: string;
 }
 
 export type AgentActionExecutionStatus = "applied" | "failed" | "rejected";
@@ -55,22 +55,17 @@ export interface PendingAgentActionSnapshot {
   actionType: string;
   toolName: string;
   runId: string;
+  conversationId?: string;
+  assistantMessageId?: string;
   action: AgentProposedAction;
   createdAt: number;
 }
 
-export async function sendAgentChatWithInvoker(
+export async function startAgentConversationTurnWithInvoker(
   invokeAgentCommand: AgentCommandInvoker,
-  input: AgentChatInput,
-): Promise<AgentChatOutput> {
-  return invokeAgentCommand<AgentChatOutput>("agent_send_chat", { input });
-}
-
-export async function startAgentChatWithInvoker(
-  invokeAgentCommand: AgentCommandInvoker,
-  input: AgentChatInput,
-): Promise<AgentStartChatOutput> {
-  return invokeAgentCommand<AgentStartChatOutput>("agent_start_chat", { input });
+  input: AgentConversationTurnInput,
+): Promise<AgentConversationTurnOutput> {
+  return invokeAgentCommand<AgentConversationTurnOutput>("agent_start_conversation_turn", { input });
 }
 
 export async function listPendingAgentActionsWithInvoker(

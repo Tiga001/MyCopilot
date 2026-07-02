@@ -4,6 +4,7 @@ use crate::agent_actions::orchestrator::{
 use crate::agent_actions::pending::PendingAgentActionSnapshot;
 use crate::agent_actions::AgentActionState;
 use crate::process::command_runner::CommandRunState;
+use crate::storage::StorageState;
 use tauri::State;
 
 #[tauri::command]
@@ -18,8 +19,9 @@ pub async fn agent_approve_action(
     action_id: String,
     action_state: State<'_, AgentActionState>,
     command_state: State<'_, CommandRunState>,
+    storage_state: State<'_, StorageState>,
 ) -> Result<AgentActionExecutionOutput, String> {
-    approve_action(&action_state, &command_state, action_id).await
+    approve_action(&action_state, &command_state, &storage_state, action_id).await
 }
 
 #[tauri::command]
@@ -27,8 +29,9 @@ pub async fn agent_reject_action(
     action_id: String,
     message: Option<String>,
     state: State<'_, AgentActionState>,
+    storage_state: State<'_, StorageState>,
 ) -> Result<AgentActionExecutionOutput, String> {
-    reject_action(&state, action_id, message).await
+    reject_action(&state, &storage_state, action_id, message).await
 }
 
 #[tauri::command]

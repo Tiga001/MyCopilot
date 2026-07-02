@@ -14,19 +14,19 @@ impl AgentTool for ReadPresentationTool {
         AgentToolDefinition {
             name: "read_presentation".to_string(),
             description:
-                "Extract text from presentation files (.pptx, .ppt) inside the selected workspace."
+                "Extract text from presentation files (.pptx, .ppt) in the selected workspace or an @attachments path."
                     .to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string", "description": "Workspace-relative .pptx or .ppt path." },
+                    "path": { "type": "string", "description": "Workspace-relative .pptx/.ppt path or @attachments/... readPath." },
                     "filePath": { "type": "string", "description": "Alias for path." },
                     "maxChars": { "type": "integer", "minimum": 1, "maximum": MAX_DOCUMENT_TEXT_CHARS }
                 },
                 "required": ["path"]
             }),
             safety: AgentToolSafety::ReadOnly,
-            requires_workspace: true,
+            requires_workspace: false,
             requires_approval: false,
         }
     }
@@ -173,6 +173,7 @@ mod tests {
                     display_name: Some("test".to_string()),
                     root_path: Some(self.root.to_string_lossy().to_string()),
                 }),
+                attachment_library: None,
             }))
         }
     }

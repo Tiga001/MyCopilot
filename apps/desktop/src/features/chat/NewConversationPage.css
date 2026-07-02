@@ -23,9 +23,9 @@
     var(--mc-font-size-chat-title-preferred),
     var(--mc-font-size-chat-title-max)
   );
-  font-weight: 500;
+  font-weight: var(--mc-font-weight-regular);
   letter-spacing: -0.035em;
-  line-height: 1.2;
+  line-height: var(--mc-line-height-compact);
   text-align: center;
 }
 

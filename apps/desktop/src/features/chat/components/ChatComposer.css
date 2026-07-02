@@ -5,10 +5,8 @@
   color: var(--mc-color-text-primary);
   background: var(--mc-color-surface-elevated);
   border: 1px solid var(--mc-color-border-default);
-  border-radius: 24px;
-  box-shadow:
-    0 18px 46px rgba(20, 23, 28, 0.1),
-    0 2px 8px rgba(20, 23, 28, 0.04);
+  border-radius: var(--mc-radius-composer);
+  box-shadow: var(--mc-shadow-composer);
   container-type: inline-size;
   -webkit-app-region: no-drag;
 }
@@ -28,16 +26,16 @@
   background: transparent;
   border: 0;
   outline: 0;
-  box-shadow: none;
+  box-shadow: var(--mc-shadow-none);
   font: inherit;
   font-size: var(--mc-font-size-chat-input);
-  line-height: 1.5;
+  line-height: var(--mc-line-height-relaxed);
 }
 
 .chat-composer textarea:focus,
 .chat-composer textarea:focus-visible {
   outline: 0;
-  box-shadow: none;
+  box-shadow: var(--mc-shadow-none);
 }
 
 .chat-composer textarea::placeholder {
@@ -68,13 +66,13 @@
   padding: 10px 12px 10px;
   margin: 14px -20px 0;
   background: var(--mc-color-surface-muted);
-  border-radius: 0 0 24px 24px;
+  border-radius: var(--mc-radius-none) var(--mc-radius-none) var(--mc-radius-composer) var(--mc-radius-composer);
 }
 
 .chat-composer__toolbar svg {
-  width: 20px;
-  height: 20px;
-  stroke-width: 1.8;
+  width: var(--mc-icon-size-xl);
+  height: var(--mc-icon-size-xl);
+  stroke-width: var(--mc-icon-stroke-regular);
 }
 
 .chat-composer__attachments {
@@ -96,27 +94,27 @@
   color: var(--mc-color-text-secondary);
   background: var(--mc-color-surface-muted);
   border: 1px solid var(--mc-color-border-subtle);
-  border-radius: 12px;
+  border-radius: var(--mc-radius-2xl);
 }
 
 .composer-attachment img {
   width: 30px;
   height: 30px;
-  border-radius: 8px;
+  border-radius: var(--mc-radius-sm);
   object-fit: cover;
 }
 
 .composer-attachment > svg {
-  width: 22px;
-  height: 22px;
+  width: var(--mc-icon-size-3xl);
+  height: var(--mc-icon-size-3xl);
   color: var(--mc-color-icon-muted);
 }
 
 .composer-attachment span {
   overflow: hidden;
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 1;
+  font-size: var(--mc-font-size-xs);
+  font-weight: var(--mc-font-weight-bold);
+  line-height: var(--mc-line-height-none);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -129,7 +127,7 @@
   place-items: center;
   color: var(--mc-color-icon-subtle);
   background: transparent;
-  border-radius: 7px;
+  border-radius: var(--mc-radius-xs);
 }
 
 .composer-attachment button:hover {
@@ -137,16 +135,16 @@
 }
 
 .composer-attachment button svg {
-  width: 15px;
-  height: 15px;
+  width: var(--mc-icon-size-xs);
+  height: var(--mc-icon-size-xs);
 }
 
 .chat-composer__warning {
   margin: 8px 0 0;
   color: var(--mc-color-text-danger);
-  font-size: 14px;
-  font-weight: 650;
-  line-height: 20px;
+  font-size: var(--mc-font-size-sm);
+  font-weight: var(--mc-font-weight-strong);
+  line-height: var(--mc-line-height-sidebar);
 }
 
 .composer-icon-button,
@@ -158,7 +156,7 @@
   padding: 0;
   color: var(--mc-color-icon-subtle);
   background: transparent;
-  border-radius: 9px;
+  border-radius: var(--mc-radius-md);
 }
 
 .composer-icon-button {
@@ -171,7 +169,7 @@
   gap: 6px;
   padding: 0 4px;
   font-size: var(--mc-font-size-chat-toolbar);
-  font-weight: 600;
+  font-weight: var(--mc-font-weight-bold);
 }
 
 .composer-add-picker {
@@ -217,10 +215,10 @@
   color: var(--mc-color-text-primary);
   background: transparent;
   border: 0;
-  border-radius: 13px;
+  border-radius: var(--mc-radius-control);
   font: inherit;
-  font-size: 18px;
-  font-weight: 500;
+  font-size: var(--mc-font-size-xl);
+  font-weight: var(--mc-font-weight-regular);
   cursor: pointer;
 }
 
@@ -229,8 +227,8 @@
 }
 
 .composer-project-button svg {
-  width: 19px;
-  height: 19px;
+  width: var(--mc-icon-size-lg);
+  height: var(--mc-icon-size-lg);
   color: var(--mc-color-icon-muted);
 }
 
@@ -257,10 +255,8 @@
   gap: 4px;
   background: var(--mc-color-surface-elevated);
   border: 1px solid var(--mc-color-border-default);
-  border-radius: 18px;
-  box-shadow:
-    0 18px 48px rgba(20, 23, 28, 0.14),
-    0 3px 10px rgba(20, 23, 28, 0.06);
+  border-radius: var(--mc-radius-popover);
+  box-shadow: var(--mc-shadow-popover);
 }
 
 .composer-add-menu {
@@ -274,19 +270,17 @@
   gap: 4px;
   background: var(--mc-color-surface-elevated);
   border: 1px solid var(--mc-color-border-default);
-  border-radius: 18px;
-  box-shadow:
-    0 22px 58px rgba(20, 23, 28, 0.16),
-    0 6px 18px rgba(20, 23, 28, 0.08);
+  border-radius: var(--mc-radius-popover);
+  box-shadow: var(--mc-shadow-popover-large);
 }
 
 .composer-add-menu p {
   margin: 0 0 4px;
   padding: 0 10px;
   color: var(--mc-color-text-subtle);
-  font-size: 15px;
-  font-weight: 650;
-  line-height: 24px;
+  font-size: var(--mc-font-size-md);
+  font-weight: var(--mc-font-weight-strong);
+  line-height: var(--mc-line-height-control);
 }
 
 .composer-add-menu button {
@@ -300,7 +294,7 @@
   text-align: left;
   background: transparent;
   border: 0;
-  border-radius: 12px;
+  border-radius: var(--mc-radius-2xl);
 }
 
 .composer-add-menu button:hover {
@@ -308,16 +302,16 @@
 }
 
 .composer-add-menu button svg {
-  width: 20px;
-  height: 20px;
+  width: var(--mc-icon-size-xl);
+  height: var(--mc-icon-size-xl);
   color: var(--mc-color-icon-muted);
 }
 
 .composer-add-menu button span {
   color: var(--mc-color-text-primary);
-  font-size: 17px;
-  font-weight: 700;
-  line-height: 1;
+  font-size: var(--mc-font-size-lg);
+  font-weight: var(--mc-font-weight-heavy);
+  line-height: var(--mc-line-height-none);
   white-space: nowrap;
 }
 
@@ -333,10 +327,8 @@
   gap: 2px;
   background: var(--mc-color-surface-elevated);
   border: 1px solid var(--mc-color-border-default);
-  border-radius: 18px;
-  box-shadow:
-    0 22px 58px rgba(20, 23, 28, 0.16),
-    0 6px 18px rgba(20, 23, 28, 0.08);
+  border-radius: var(--mc-radius-popover);
+  box-shadow: var(--mc-shadow-popover-large);
 }
 
 .composer-project-menu {
@@ -351,10 +343,8 @@
   gap: 10px;
   background: var(--mc-color-surface-elevated);
   border: 1px solid var(--mc-color-border-default);
-  border-radius: 18px;
-  box-shadow:
-    0 22px 58px rgba(20, 23, 28, 0.16),
-    0 6px 18px rgba(20, 23, 28, 0.08);
+  border-radius: var(--mc-radius-popover);
+  box-shadow: var(--mc-shadow-popover-large);
 }
 
 .composer-project-menu__search {
@@ -366,8 +356,8 @@
 }
 
 .composer-project-menu__search svg {
-  width: 18px;
-  height: 18px;
+  width: var(--mc-icon-size-base);
+  height: var(--mc-icon-size-base);
 }
 
 .composer-project-menu__search input {
@@ -379,7 +369,7 @@
   border: 0;
   outline: 0;
   font: inherit;
-  font-size: 17px;
+  font-size: var(--mc-font-size-lg);
 }
 
 .composer-project-menu__items {
@@ -401,9 +391,9 @@
   text-align: left;
   background: transparent;
   border: 0;
-  border-radius: 10px;
+  border-radius: var(--mc-radius-lg);
   font: inherit;
-  font-size: 18px;
+  font-size: var(--mc-font-size-xl);
   cursor: pointer;
 }
 
@@ -415,15 +405,15 @@
 
 .composer-project-option > svg:first-child,
 .composer-project-command > svg:first-child {
-  width: 19px;
-  height: 19px;
+  width: var(--mc-icon-size-lg);
+  height: var(--mc-icon-size-lg);
   color: var(--mc-color-icon-muted);
 }
 
 .composer-project-option > svg:last-child,
 .composer-project-command > svg:last-child {
-  width: 19px;
-  height: 19px;
+  width: var(--mc-icon-size-lg);
+  height: var(--mc-icon-size-lg);
   color: var(--mc-color-icon-muted);
 }
 
@@ -453,7 +443,7 @@
   gap: 10px;
   text-align: left;
   background: transparent;
-  border-radius: 13px;
+  border-radius: var(--mc-radius-control);
 }
 
 .composer-model-option {
@@ -466,7 +456,7 @@
   color: var(--mc-color-text-secondary);
   text-align: left;
   background: transparent;
-  border-radius: 14px;
+  border-radius: var(--mc-radius-row);
 }
 
 .composer-model-option[data-selected="true"],
@@ -476,9 +466,9 @@
 
 .composer-model-option__name {
   overflow: hidden;
-  font-size: 23px;
-  font-weight: 650;
-  line-height: 1.1;
+  font-size: var(--mc-font-size-4xl);
+  font-weight: var(--mc-font-weight-strong);
+  line-height: var(--mc-line-height-tight);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -492,10 +482,10 @@
   padding: 0 14px;
   color: var(--mc-color-text-muted);
   background: var(--mc-color-surface-neutral-subtle);
-  border-radius: 999px;
-  font-size: 20px;
-  font-weight: 700;
-  line-height: 1;
+  border-radius: var(--mc-radius-pill);
+  font-size: var(--mc-font-size-2xl);
+  font-weight: var(--mc-font-weight-heavy);
+  line-height: var(--mc-line-height-none);
 }
 
 .composer-model-option__capability[data-supported="true"] {
@@ -507,7 +497,7 @@
   display: block;
   padding: 16px 18px;
   color: var(--mc-color-text-muted);
-  font-size: 15px;
+  font-size: var(--mc-font-size-md);
 }
 
 .composer-permission-option[data-permission="default"] {
@@ -524,24 +514,24 @@
 
 .composer-permission-option span {
   overflow: hidden;
-  font-size: 17px;
-  font-weight: 700;
-  line-height: 1;
+  font-size: var(--mc-font-size-lg);
+  font-weight: var(--mc-font-weight-heavy);
+  line-height: var(--mc-line-height-none);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .composer-permission-option > svg:first-child {
-  width: 24px;
-  height: 24px;
-  stroke-width: 2.3;
+  width: var(--mc-icon-size-5xl);
+  height: var(--mc-icon-size-5xl);
+  stroke-width: var(--mc-icon-stroke-heavy);
 }
 
 .composer-permission-option__check {
-  width: 23px;
-  height: 23px;
+  width: var(--mc-icon-size-4xl);
+  height: var(--mc-icon-size-4xl);
   color: var(--mc-color-icon-muted);
-  stroke-width: 2.6;
+  stroke-width: var(--mc-icon-stroke-black);
 }
 
 .chat-composer__spacer {
@@ -551,12 +541,12 @@
 
 .composer-submit-button {
   display: grid;
-  width: 44px;
-  height: 44px;
+  width: var(--mc-layout-composer-submit-size);
+  height: var(--mc-layout-composer-submit-size);
   place-items: center;
   color: var(--mc-color-text-inverse);
   background: var(--mc-color-text-primary);
-  border-radius: 999px;
+  border-radius: var(--mc-radius-pill);
 }
 
 .composer-submit-button[data-state="ready"] {
@@ -566,7 +556,7 @@
 
 .composer-submit-button[data-state="disabled"] {
   color: var(--mc-color-icon-subtle);
-  background: #e5e7eb;
+  background: var(--mc-color-surface-disabled);
 }
 
 .composer-submit-button[data-state="stop"] {
@@ -575,15 +565,15 @@
 }
 
 .composer-submit-button svg {
-  width: 24px;
-  height: 24px;
+  width: var(--mc-icon-size-5xl);
+  height: var(--mc-icon-size-5xl);
 }
 
 .composer-stop-square {
   width: 14px;
   height: 14px;
   background: var(--mc-color-text-inverse);
-  border-radius: 3px;
+  border-radius: var(--mc-radius-xxs);
 }
 
 .composer-icon-button:hover,

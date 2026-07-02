@@ -17,6 +17,8 @@ pub struct AgentChatInput {
     pub context: Option<AgentRunContext>,
     pub search_config: Option<AgentSearchConfig>,
     pub approval_decision: Option<AgentApprovalDecision>,
+    #[serde(default)]
+    pub attachments: Vec<AgentInputAttachment>,
     pub messages: Vec<AgentChatMessage>,
 }
 
@@ -24,6 +26,35 @@ pub struct AgentChatInput {
 pub struct AgentChatMessage {
     pub role: String,
     pub content: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentInputAttachmentKind {
+    File,
+    Image,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentInputAttachmentEncoding {
+    Utf8,
+    Base64,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentInputAttachment {
+    pub id: String,
+    pub kind: AgentInputAttachmentKind,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    pub size_bytes: u64,
+    pub encoding: AgentInputAttachmentEncoding,
+    pub data: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub truncated: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -98,6 +129,8 @@ pub struct AgentRunContext {
     pub conversation_id: Option<String>,
     pub project_id: Option<String>,
     pub workspace: Option<AgentWorkspaceContext>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attachment_library: Option<AgentAttachmentLibraryContext>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -106,6 +139,39 @@ pub struct AgentWorkspaceContext {
     pub project_id: Option<String>,
     pub display_name: Option<String>,
     pub root_path: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentAttachmentLibraryContext {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    #[serde(default)]
+    pub conversation_attachments: Vec<AgentAttachmentReference>,
+    #[serde(default)]
+    pub project_attachments: Vec<AgentAttachmentReference>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentAttachmentReference {
+    pub id: String,
+    pub conversation_id: String,
+    pub message_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    pub kind: AgentInputAttachmentKind,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    pub size_bytes: u64,
+    pub read_path: String,
+    pub storage_rel_path: String,
+    pub created_at: i64,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]

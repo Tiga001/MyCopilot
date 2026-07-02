@@ -12,6 +12,8 @@ pub struct PendingAgentAction {
     pub action_type: String,
     pub tool_name: String,
     pub run_id: String,
+    pub conversation_id: Option<String>,
+    pub assistant_message_id: Option<String>,
     pub input: AgentChatInput,
     pub action: AgentProposedAction,
     pub created_at: u64,
@@ -24,6 +26,10 @@ pub struct PendingAgentActionSnapshot {
     pub action_type: String,
     pub tool_name: String,
     pub run_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assistant_message_id: Option<String>,
     pub action: AgentProposedAction,
     pub created_at: u64,
 }
@@ -34,7 +40,13 @@ pub struct AgentActionState {
 }
 
 impl AgentActionState {
-    pub fn store_output_actions(&self, input: &AgentChatInput, output: &AgentChatOutput) {
+    pub fn store_output_actions_with_message(
+        &self,
+        input: &AgentChatInput,
+        output: &AgentChatOutput,
+        conversation_id: Option<String>,
+        assistant_message_id: Option<String>,
+    ) {
         if output.proposed_actions.is_empty() {
             return;
         }
@@ -49,7 +61,15 @@ impl AgentActionState {
                 .get(action_id(action).unwrap_or_default())
                 .map(|call| call.tool.clone())
                 .unwrap_or_else(|| fallback_tool_name(action));
-            insert_pending_action(&mut pending, input, &output.run_id, action, Some(tool_name));
+            insert_pending_action(
+                &mut pending,
+                input,
+                &output.run_id,
+                action,
+                Some(tool_name),
+                conversation_id.clone(),
+                assistant_message_id.clone(),
+            );
         }
     }
 
@@ -59,9 +79,19 @@ impl AgentActionState {
         run_id: &str,
         action: &AgentProposedAction,
         tool_name: Option<String>,
+        conversation_id: Option<String>,
+        assistant_message_id: Option<String>,
     ) -> Result<(), String> {
         let mut pending = self.pending()?;
-        insert_pending_action(&mut pending, input, run_id, action, tool_name);
+        insert_pending_action(
+            &mut pending,
+            input,
+            run_id,
+            action,
+            tool_name,
+            conversation_id,
+            assistant_message_id,
+        );
         Ok(())
     }
 
@@ -81,6 +111,8 @@ impl AgentActionState {
                 action_type: action.action_type.clone(),
                 tool_name: action.tool_name.clone(),
                 run_id: action.run_id.clone(),
+                conversation_id: action.conversation_id.clone(),
+                assistant_message_id: action.assistant_message_id.clone(),
                 action: action.action.clone(),
                 created_at: action.created_at,
             })
@@ -102,6 +134,8 @@ fn insert_pending_action(
     run_id: &str,
     action: &AgentProposedAction,
     tool_name: Option<String>,
+    conversation_id: Option<String>,
+    assistant_message_id: Option<String>,
 ) {
     let Some(action_id) = action_id(action) else {
         return;
@@ -118,6 +152,8 @@ fn insert_pending_action(
             action_type: action_type(action).to_string(),
             tool_name: tool_name.unwrap_or_else(|| fallback_tool_name(action)),
             run_id: run_id.to_string(),
+            conversation_id,
+            assistant_message_id,
             input: input.clone(),
             action: action.clone(),
             created_at,

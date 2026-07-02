@@ -14,19 +14,19 @@ impl AgentTool for ReadWordTool {
         AgentToolDefinition {
             name: "read_word".to_string(),
             description:
-                "Extract text from Word documents (.docx, .doc) inside the selected workspace."
+                "Extract text from Word documents (.docx, .doc) in the selected workspace or an @attachments path."
                     .to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string", "description": "Workspace-relative .docx or .doc path." },
+                    "path": { "type": "string", "description": "Workspace-relative .docx/.doc path or @attachments/... readPath." },
                     "filePath": { "type": "string", "description": "Alias for path." },
                     "maxChars": { "type": "integer", "minimum": 1, "maximum": MAX_DOCUMENT_TEXT_CHARS }
                 },
                 "required": ["path"]
             }),
             safety: AgentToolSafety::ReadOnly,
-            requires_workspace: true,
+            requires_workspace: false,
             requires_approval: false,
         }
     }
@@ -161,6 +161,7 @@ mod tests {
                     display_name: Some("test".to_string()),
                     root_path: Some(self.root.to_string_lossy().to_string()),
                 }),
+                attachment_library: None,
             }))
         }
     }

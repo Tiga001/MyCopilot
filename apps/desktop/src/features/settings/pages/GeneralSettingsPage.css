@@ -17,15 +17,15 @@
   margin: 0;
   color: var(--mc-color-text-primary);
   font-size: var(--mc-font-size-settings-section-title);
-  font-weight: 650;
-  line-height: 24px;
+  font-weight: var(--mc-font-weight-strong);
+  line-height: var(--mc-line-height-control);
 }
 
 .general-settings-section p {
   margin: 4px 0 0;
   color: var(--mc-color-text-muted);
   font-size: var(--mc-font-size-settings-nav);
-  line-height: 20px;
+  line-height: var(--mc-line-height-sidebar);
 }
 
 .general-settings-select {
@@ -42,7 +42,7 @@
     linear-gradient(135deg, var(--mc-color-icon-muted) 50%, transparent 50%) calc(100% - 12px) 16px / 6px 6px no-repeat,
     var(--mc-color-surface-muted);
   border: 0;
-  border-radius: 10px;
+  border-radius: var(--mc-radius-lg);
   outline: 0;
   appearance: none;
   font: inherit;

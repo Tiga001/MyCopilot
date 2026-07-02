@@ -1,17 +1,43 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from "lucide-react";
+import { listen } from "@tauri-apps/api/event";
 import { ResizeHandle } from "../components/layout/ResizeHandle";
 import { LeftSidebar } from "../components/sidebar/LeftSidebar";
 import { RightSidebar } from "../components/sidebar/RightSidebar";
 import { useFrontendConfig } from "../config/FrontendConfigProvider";
-import { useModelSettings } from "../config/ModelSettingsProvider";
 import { useProjectSettings } from "../config/ProjectSettingsProvider";
-import { sendAgentMessage } from "../features/agent/agentClient";
+import {
+  approveAgentAction,
+  cancelAgentAction,
+  rejectAgentAction,
+  startConversationTurn,
+} from "../features/agent/agentClient";
 import { ChatConversationPage } from "../features/chat/ChatConversationPage";
 import { NewConversationPage } from "../features/chat/NewConversationPage";
-import type { ChatConversation, ChatMessage, ChatSubmitOptions } from "../features/chat/chatTypes";
-import { loadConversations, saveConversation } from "../features/storage/storageClient";
+import type {
+  ChatAgentCommandOutput,
+  ChatAgentRunView,
+  ChatAgentTimelineItem,
+  ChatConversation,
+  ChatMessage,
+  ChatSubmitOptions,
+} from "../features/chat/chatTypes";
+import {
+  deleteStoredConversation,
+  loadConversations,
+  saveConversation,
+} from "../features/storage/storageClient";
 import { SettingsPage } from "../features/settings/SettingsPage";
+import type {
+  AgentActionExecutionOutput,
+  AgentChatOutput,
+  AgentCommandExecutionResult,
+  AgentConversationMessage,
+  AgentConversationTurnInput,
+  AgentEvent,
+  AgentInputAttachment,
+  AgentProposedAction,
+} from "@agent";
 
 const LEFT_DEFAULT_WIDTH = 288;
 const RIGHT_DEFAULT_WIDTH = 360;
@@ -23,6 +49,13 @@ const CENTER_MIN_WIDTH = 480;
 type Side = "left" | "right";
 type AppView = "workspace" | "settings";
 type WorkspaceView = "blank" | "newConversation" | "conversation";
+type ActiveRunBinding = {
+  conversationId: string;
+  pendingMessageId: string;
+  unlisten: () => void;
+};
+
+const THINKING_PLACEHOLDER = "正在思考...";
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
@@ -57,6 +90,451 @@ function createAssistantMessage(content: string, status: ChatMessage["status"] =
   };
 }
 
+function getChatMessageStatusFromConversationMessage(
+  status: AgentConversationMessage["status"],
+): ChatMessage["status"] {
+  return status ?? undefined;
+}
+
+function mergeConversationMessageFromBackend(
+  currentMessage: ChatMessage,
+  backendMessage: AgentConversationMessage,
+): ChatMessage {
+  return {
+    ...currentMessage,
+    id: backendMessage.id,
+    role: backendMessage.role,
+    content: backendMessage.content,
+    createdAt: backendMessage.createdAt,
+    status: getChatMessageStatusFromConversationMessage(backendMessage.status),
+  };
+}
+
+function createAgentRun(runId: string | null, status: ChatAgentRunView["status"] = "starting"): ChatAgentRunView {
+  return {
+    runId,
+    status,
+    toolDefinitions: [],
+    toolCalls: [],
+    toolResults: [],
+    approvals: [],
+    diffs: [],
+    commandOutputs: [],
+    timeline: [],
+  };
+}
+
+function ensureAgentRun(
+  currentRun: ChatAgentRunView | undefined,
+  runId: string | null | undefined,
+  status?: ChatAgentRunView["status"],
+): ChatAgentRunView {
+  if (!currentRun) {
+    return createAgentRun(runId ?? null, status);
+  }
+
+  return {
+    ...currentRun,
+    runId: currentRun.runId ?? runId ?? null,
+    status: status ?? currentRun.status,
+    timeline: currentRun.timeline ?? [],
+  };
+}
+
+function upsertById<T>(items: T[], nextItem: T, getId: (item: T) => string) {
+  const nextId = getId(nextItem);
+  const itemIndex = items.findIndex((item) => getId(item) === nextId);
+
+  if (itemIndex === -1) {
+    return [...items, nextItem];
+  }
+
+  return items.map((item, index) => (index === itemIndex ? nextItem : item));
+}
+
+function getAgentActionId(action: AgentProposedAction) {
+  if (action.type === "diff") return action.diff.id;
+  if (action.type === "command") return action.command.id;
+  return action.call.id;
+}
+
+function upsertAgentAction(actions: AgentProposedAction[], nextAction: AgentProposedAction) {
+  return upsertById(actions, nextAction, getAgentActionId);
+}
+
+function appendTimelineItem(run: ChatAgentRunView, item: ChatAgentTimelineItem): ChatAgentTimelineItem[] {
+  if (run.timeline.some((timelineItem) => timelineItem.id === item.id)) {
+    return run.timeline.map((timelineItem) => (timelineItem.id === item.id ? item : timelineItem));
+  }
+
+  return [...run.timeline, item];
+}
+
+function appendApprovalActionsToTimeline(
+  timeline: ChatAgentTimelineItem[],
+  actions: AgentProposedAction[],
+): ChatAgentTimelineItem[] {
+  return actions.reduce((currentTimeline, action) => {
+    const actionId = getAgentActionId(action);
+    const timelineItem: ChatAgentTimelineItem = {
+      id: `approval-${actionId}`,
+      type: "approval",
+      actionId,
+    };
+
+    if (currentTimeline.some((item) => item.id === timelineItem.id)) {
+      return currentTimeline.map((item) => (item.id === timelineItem.id ? timelineItem : item));
+    }
+
+    return [...currentTimeline, timelineItem];
+  }, timeline);
+}
+
+function appendMessageDeltaToTimeline(run: ChatAgentRunView, delta: string): ChatAgentTimelineItem[] {
+  const lastItem = run.timeline[run.timeline.length - 1];
+
+  if (lastItem?.type === "message") {
+    return run.timeline.map((timelineItem) =>
+      timelineItem.id === lastItem.id && timelineItem.type === "message"
+        ? {
+            ...timelineItem,
+            content: `${timelineItem.content}${delta}`,
+          }
+        : timelineItem,
+    );
+  }
+
+  return [
+    ...run.timeline,
+    {
+      id: `message-${run.timeline.length + 1}`,
+      type: "message",
+      content: delta,
+    },
+  ];
+}
+
+function appendMessageToTimeline(run: ChatAgentRunView, content: string): ChatAgentTimelineItem[] {
+  const lastItem = run.timeline[run.timeline.length - 1];
+
+  if (lastItem?.type === "message") {
+    return run.timeline.map((timelineItem) =>
+      timelineItem.id === lastItem.id && timelineItem.type === "message"
+        ? {
+            ...timelineItem,
+            content,
+          }
+        : timelineItem,
+    );
+  }
+
+  return [
+    ...run.timeline,
+    {
+      id: `message-${run.timeline.length + 1}`,
+      type: "message",
+      content,
+    },
+  ];
+}
+
+function getMessageContentAfterDelta(content: string, delta: string) {
+  const previousContent = content === THINKING_PLACEHOLDER ? "" : content;
+  return `${previousContent}${delta}`;
+}
+
+function getFinalMessageContent(currentContent: string, finalContent?: string) {
+  if (!finalContent) {
+    return currentContent === THINKING_PLACEHOLDER ? "" : currentContent;
+  }
+
+  if (!currentContent || currentContent === THINKING_PLACEHOLDER) {
+    return finalContent;
+  }
+
+  return currentContent;
+}
+
+function getChatMessageStatusFromAgentStatus(status: AgentChatOutput["status"]): ChatMessage["status"] {
+  if (status === "running" || status === "waiting_for_approval" || status === "idle") return "pending";
+  if (status === "failed" || status === "cancelled") return "error";
+  return "sent";
+}
+
+function applyAgentEventToChatMessage(message: ChatMessage, agentEvent: AgentEvent): ChatMessage {
+  const runId = agentEvent.runId ?? message.agentRun?.runId ?? null;
+  const currentRun = ensureAgentRun(message.agentRun, runId);
+
+  if (agentEvent.type === "started") {
+    return {
+      ...message,
+      status: "pending",
+      agentRun: {
+        ...currentRun,
+        runId: agentEvent.runId,
+        status: "running",
+        toolDefinitions: agentEvent.toolDefinitions,
+      },
+    };
+  }
+
+  if (agentEvent.type === "state") {
+    return {
+      ...message,
+      status: getChatMessageStatusFromAgentStatus(agentEvent.state.status),
+      agentRun: {
+        ...currentRun,
+        status: agentEvent.state.status,
+        state: agentEvent.state,
+        error: agentEvent.state.lastError ?? currentRun.error,
+      },
+    };
+  }
+
+  if (agentEvent.type === "message_delta") {
+    return {
+      ...message,
+      content: getMessageContentAfterDelta(message.content, agentEvent.delta),
+      status: "pending",
+      agentRun: {
+        ...currentRun,
+        status: "running",
+        timeline: appendMessageDeltaToTimeline(currentRun, agentEvent.delta),
+      },
+    };
+  }
+
+  if (agentEvent.type === "message") {
+    return {
+      ...message,
+      content: agentEvent.content,
+      status: "pending",
+      agentRun: {
+        ...currentRun,
+        status: "running",
+        timeline: appendMessageToTimeline(currentRun, agentEvent.content),
+      },
+    };
+  }
+
+  if (agentEvent.type === "tool_call") {
+    return {
+      ...message,
+      status: "pending",
+      agentRun: {
+        ...currentRun,
+        status: "running",
+        toolCalls: upsertById(currentRun.toolCalls, agentEvent.call, (call) => call.id),
+        timeline: appendTimelineItem(currentRun, {
+          id: `tool-call-${agentEvent.call.id}`,
+          type: "tool_call",
+          callId: agentEvent.call.id,
+        }),
+      },
+    };
+  }
+
+  if (agentEvent.type === "tool_result") {
+    return {
+      ...message,
+      status: "pending",
+      agentRun: {
+        ...currentRun,
+        status: "running",
+        toolResults: upsertById(currentRun.toolResults, agentEvent.result, (result) => result.callId),
+      },
+    };
+  }
+
+  if (agentEvent.type === "approval_required") {
+    return {
+      ...message,
+      status: "pending",
+      agentRun: {
+        ...currentRun,
+        status: "waiting_for_approval",
+        approvals: upsertAgentAction(currentRun.approvals, agentEvent.action),
+        timeline: appendTimelineItem(currentRun, {
+          id: `approval-${getAgentActionId(agentEvent.action)}`,
+          type: "approval",
+          actionId: getAgentActionId(agentEvent.action),
+        }),
+      },
+    };
+  }
+
+  if (agentEvent.type === "diff") {
+    return {
+      ...message,
+      status: "pending",
+      agentRun: {
+        ...currentRun,
+        status: "running",
+        diffs: upsertById(currentRun.diffs, agentEvent.diff, (diff) => diff.id),
+        timeline: appendTimelineItem(currentRun, {
+          id: `diff-${agentEvent.diff.id}`,
+          type: "diff",
+          diffId: agentEvent.diff.id,
+        }),
+      },
+    };
+  }
+
+  if (agentEvent.type === "command_output") {
+    const commandOutput: ChatAgentCommandOutput = {
+      id: `${agentEvent.runId}-command-output-${currentRun.commandOutputs.length + 1}`,
+      command: agentEvent.command,
+      stream: agentEvent.stream,
+      output: agentEvent.output,
+    };
+
+    return {
+      ...message,
+      status: "pending",
+      agentRun: {
+        ...currentRun,
+        status: "running",
+        commandOutputs: [...currentRun.commandOutputs, commandOutput],
+        timeline: appendTimelineItem(currentRun, {
+          id: `command-output-${commandOutput.id}`,
+          type: "command_output",
+          outputId: commandOutput.id,
+        }),
+      },
+    };
+  }
+
+  if (agentEvent.type === "error") {
+    return {
+      ...message,
+      content: agentEvent.recoverable ? message.content : agentEvent.message,
+      status: agentEvent.recoverable ? message.status : "error",
+      agentRun: {
+        ...currentRun,
+        status: agentEvent.recoverable ? currentRun.status : "failed",
+        error: agentEvent.message,
+        timeline: appendTimelineItem(currentRun, {
+          id: `error-${currentRun.timeline.length + 1}`,
+          type: "error",
+          message: agentEvent.message,
+        }),
+      },
+    };
+  }
+
+  const nextStatus = agentEvent.status ?? (agentEvent.success ? "completed" : "failed");
+  const proposedActions = agentEvent.proposedActions ?? [];
+
+  return {
+    ...message,
+    content: getFinalMessageContent(message.content, agentEvent.content),
+    status: nextStatus === "waiting_for_approval" ? "pending" : agentEvent.success ? "sent" : "error",
+    agentRun: {
+      ...currentRun,
+      status: nextStatus,
+      usage: agentEvent.usage,
+      finishReason: agentEvent.finishReason,
+      approvals: proposedActions.reduce(upsertAgentAction, currentRun.approvals),
+      timeline: appendApprovalActionsToTimeline(currentRun.timeline, proposedActions),
+    },
+  };
+}
+
+function applyAgentOutputToChatMessage(message: ChatMessage, output: AgentChatOutput): ChatMessage {
+  const streamedContentEvents = output.events.some(
+    (event) => event.type === "message" || event.type === "message_delta",
+  );
+  const messageWithEvents = output.events.reduce(applyAgentEventToChatMessage, message);
+  const currentRun = ensureAgentRun(messageWithEvents.agentRun, output.runId, output.status);
+  const nextContent =
+    output.content && (!streamedContentEvents || !messageWithEvents.content || messageWithEvents.content === THINKING_PLACEHOLDER)
+      ? output.content
+      : messageWithEvents.content;
+
+  return {
+    ...messageWithEvents,
+    content: nextContent,
+    status: getChatMessageStatusFromAgentStatus(output.status),
+    agentRun: {
+      ...currentRun,
+      status: output.status,
+      toolDefinitions: output.toolDefinitions,
+      usage: output.usage,
+      finishReason: output.finishReason,
+      approvals: output.proposedActions.reduce(upsertAgentAction, currentRun.approvals),
+      timeline: appendApprovalActionsToTimeline(currentRun.timeline, output.proposedActions),
+    },
+  };
+}
+
+function createCommandOutputsFromExecution(
+  actionId: string,
+  commandResult: AgentCommandExecutionResult,
+): ChatAgentCommandOutput[] {
+  const outputs: ChatAgentCommandOutput[] = [];
+
+  if (commandResult.stdout) {
+    outputs.push({
+      id: `${actionId}-stdout`,
+      command: commandResult.command,
+      stream: "stdout",
+      output: commandResult.stdout,
+    });
+  }
+
+  if (commandResult.stderr) {
+    outputs.push({
+      id: `${actionId}-stderr`,
+      command: commandResult.command,
+      stream: "stderr",
+      output: commandResult.stderr,
+    });
+  }
+
+  if (outputs.length === 0 && commandResult.error) {
+    outputs.push({
+      id: `${actionId}-error`,
+      command: commandResult.command,
+      stream: "stderr",
+      output: commandResult.error,
+    });
+  }
+
+  return outputs;
+}
+
+function applyAgentActionExecutionToChatMessage(
+  message: ChatMessage,
+  execution: AgentActionExecutionOutput,
+): ChatMessage {
+  const messageWithAgentOutput = applyAgentOutputToChatMessage(message, execution.agentOutput);
+
+  if (!execution.commandResult) {
+    return messageWithAgentOutput;
+  }
+
+  const currentRun = ensureAgentRun(messageWithAgentOutput.agentRun, execution.agentOutput.runId);
+  const commandOutputs = createCommandOutputsFromExecution(execution.actionId, execution.commandResult);
+
+  return {
+    ...messageWithAgentOutput,
+    agentRun: {
+      ...currentRun,
+      commandOutputs: [...currentRun.commandOutputs, ...commandOutputs],
+      timeline: [
+        ...currentRun.timeline,
+        ...commandOutputs.map(
+          (output): ChatAgentTimelineItem => ({
+            id: `command-output-${output.id}`,
+            type: "command_output",
+            outputId: output.id,
+          }),
+        ),
+      ],
+    },
+  };
+}
+
 function getErrorMessage(error: unknown) {
   if (typeof error === "string") return error;
   if (error instanceof Error) return error.message;
@@ -66,9 +544,17 @@ function getErrorMessage(error: unknown) {
 export function App() {
   const shellRef = useRef<HTMLDivElement>(null);
   const cancelledPendingMessageIdsRef = useRef<Set<string>>(new Set());
+  const cancelledRunIdsRef = useRef<Set<string>>(new Set());
+  const activeRunBindingsRef = useRef<Map<string, ActiveRunBinding>>(new Map());
   const { t } = useFrontendConfig();
-  const { apiToken, apiUrl, models } = useModelSettings();
-  const { hasLoadedProjects, projects } = useProjectSettings();
+  const {
+    deleteProject,
+    hasLoadedProjects,
+    projects,
+    renameProject,
+    showProjectInFolder,
+    togglePinProject,
+  } = useProjectSettings();
   const [view, setView] = useState<AppView>("workspace");
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>("blank");
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
@@ -178,111 +664,228 @@ export function App() {
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId);
   const toolbarTitle = workspaceView === "conversation" ? activeConversation?.title : undefined;
 
+  const cleanupRunBinding = useCallback((runId: string) => {
+    const binding = activeRunBindingsRef.current.get(runId);
+    if (!binding) return;
+
+    binding.unlisten();
+    activeRunBindingsRef.current.delete(runId);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      activeRunBindingsRef.current.forEach((binding) => binding.unlisten());
+      activeRunBindingsRef.current.clear();
+    };
+  }, []);
+
   const startNewConversation = useCallback((projectId: string | null = null) => {
     setNewConversationProjectId(projectId);
     setActiveConversationId(null);
     setWorkspaceView("newConversation");
   }, []);
 
+  const updateAssistantMessage = useCallback(
+    (
+      conversationId: string,
+      messageId: string,
+      updater: (message: ChatMessage) => ChatMessage,
+    ) => {
+      setConversations((currentConversations) =>
+        currentConversations.map((conversation) =>
+          conversation.id === conversationId
+            ? {
+                ...conversation,
+                messages: conversation.messages.map((message) =>
+                  message.id === messageId ? updater(message) : message,
+                ),
+                updatedAt: Date.now(),
+              }
+            : conversation,
+        ),
+      );
+    },
+    [],
+  );
+
+  const applyAgentOutputToMessage = useCallback(
+    (conversationId: string, messageId: string, output: AgentChatOutput) => {
+      updateAssistantMessage(conversationId, messageId, (message) =>
+        applyAgentOutputToChatMessage(message, output),
+      );
+
+      if (output.status !== "waiting_for_approval") {
+        cleanupRunBinding(output.runId);
+      }
+    },
+    [cleanupRunBinding, updateAssistantMessage],
+  );
+
+  const applyAgentExecutionToMessage = useCallback(
+    (conversationId: string, messageId: string, execution: AgentActionExecutionOutput) => {
+      updateAssistantMessage(conversationId, messageId, (message) =>
+        applyAgentActionExecutionToChatMessage(message, execution),
+      );
+
+      if (execution.agentOutput.status !== "waiting_for_approval") {
+        cleanupRunBinding(execution.agentOutput.runId);
+      }
+    },
+    [cleanupRunBinding, updateAssistantMessage],
+  );
+
+  const handleAgentEvent = useCallback(
+    (conversationId: string, pendingMessageId: string, agentEvent: AgentEvent) => {
+      if (agentEvent.runId && cancelledRunIdsRef.current.has(agentEvent.runId)) return;
+      if (cancelledPendingMessageIdsRef.current.has(pendingMessageId)) return;
+
+      updateAssistantMessage(conversationId, pendingMessageId, (message) =>
+        applyAgentEventToChatMessage(message, agentEvent),
+      );
+
+      if (agentEvent.type === "done") {
+        cleanupRunBinding(agentEvent.runId);
+      }
+
+      if (agentEvent.type === "error" && !agentEvent.recoverable && agentEvent.runId) {
+        cleanupRunBinding(agentEvent.runId);
+      }
+    },
+    [cleanupRunBinding, updateAssistantMessage],
+  );
+
   const requestAssistantResponse = useCallback(
     async (
       conversationId: string,
+      userMessageId: string,
       pendingMessageId: string,
-      history: ChatMessage[],
+      content: string,
       modelId: string,
       projectId: string | null,
+      attachments: AgentInputAttachment[] | undefined,
+      title?: string,
     ) => {
-      const model = models.find((candidate) => candidate.id === modelId);
-      const apiModelId = model?.providerPath ?? model?.id ?? modelId;
-      const project = projectId ? projects.find((candidate) => candidate.id === projectId) : undefined;
+      const input: AgentConversationTurnInput = {
+        assistantMessageId: pendingMessageId,
+        content,
+        conversationId,
+        maxTokens: 1024,
+        modelId,
+        projectId,
+        userMessageId,
+      };
+      if (attachments && attachments.length > 0) {
+        input.attachments = attachments;
+      }
+
+      if (title) {
+        input.title = title;
+      }
 
       try {
-        const content = await sendAgentMessage({
-          apiToken,
-          apiUrl,
-          context: {
-            conversationId,
-            projectId,
-            workspace: project
-              ? {
-                  projectId: project.id,
-                  displayName: project.name,
-                  rootPath: project.path,
-                }
-              : undefined,
-          },
-          maxTokens: 1024,
-          messages: history,
-          model: apiModelId,
-        });
+        updateAssistantMessage(conversationId, pendingMessageId, (message) => ({
+          ...message,
+          agentRun: ensureAgentRun(message.agentRun, null, "starting"),
+        }));
+
+        const startOutput = await startConversationTurn(input);
 
         if (cancelledPendingMessageIdsRef.current.has(pendingMessageId)) {
           cancelledPendingMessageIdsRef.current.delete(pendingMessageId);
           return;
         }
 
+        const resolvedConversationId = startOutput.conversationId;
+        const resolvedAssistantMessageId = startOutput.assistantMessageId;
+
         setConversations((currentConversations) =>
           currentConversations.map((conversation) =>
             conversation.id === conversationId
               ? {
                   ...conversation,
-                  messages: conversation.messages.map((message) =>
-                    message.id === pendingMessageId
-                      ? {
-                          ...message,
-                          content,
-                          status: "sent",
-                        }
-                      : message,
-                  ),
+                  id: resolvedConversationId,
+                  messages: conversation.messages.map((message) => {
+                    if (message.id === userMessageId) {
+                      return mergeConversationMessageFromBackend(message, startOutput.userMessage);
+                    }
+
+                    if (message.id === pendingMessageId) {
+                      const mergedMessage = mergeConversationMessageFromBackend(
+                        message,
+                        startOutput.assistantMessage,
+                      );
+
+                      return {
+                        ...mergedMessage,
+                        status: "pending",
+                        agentRun: ensureAgentRun(mergedMessage.agentRun, startOutput.runId, "running"),
+                      };
+                    }
+
+                    return message;
+                  }),
                   updatedAt: Date.now(),
                 }
               : conversation,
           ),
         );
+
+        if (resolvedConversationId !== conversationId) {
+          setActiveConversationId((currentActiveConversationId) =>
+            currentActiveConversationId === conversationId ? resolvedConversationId : currentActiveConversationId,
+          );
+        }
+
+        const unlisten = await listen<AgentEvent>(startOutput.eventName, (event) => {
+          const agentEvent = event.payload;
+
+          if (agentEvent.runId && agentEvent.runId !== startOutput.runId) return;
+          if (!agentEvent.runId && agentEvent.type !== "error") return;
+
+          handleAgentEvent(resolvedConversationId, resolvedAssistantMessageId, agentEvent);
+        });
+
+        activeRunBindingsRef.current.set(startOutput.runId, {
+          conversationId: resolvedConversationId,
+          pendingMessageId: resolvedAssistantMessageId,
+          unlisten,
+        });
       } catch (error) {
         if (cancelledPendingMessageIdsRef.current.has(pendingMessageId)) {
           cancelledPendingMessageIdsRef.current.delete(pendingMessageId);
           return;
         }
 
-        setConversations((currentConversations) =>
-          currentConversations.map((conversation) =>
-            conversation.id === conversationId
-              ? {
-                  ...conversation,
-                  messages: conversation.messages.map((message) =>
-                    message.id === pendingMessageId
-                      ? {
-                          ...message,
-                          content: getErrorMessage(error),
-                          status: "error",
-                        }
-                      : message,
-                  ),
-                  updatedAt: Date.now(),
-                }
-              : conversation,
-          ),
-        );
+        updateAssistantMessage(conversationId, pendingMessageId, (message) => ({
+          ...message,
+          content: getErrorMessage(error),
+          status: "error",
+          agentRun: {
+            ...ensureAgentRun(message.agentRun, null, "failed"),
+            error: getErrorMessage(error),
+          },
+        }));
       }
     },
-    [apiToken, apiUrl, models, projects],
+    [handleAgentEvent, updateAssistantMessage],
   );
 
   const createConversationFromMessage = useCallback(
     (content: string, options: ChatSubmitOptions) => {
       const now = Date.now();
+      const title = createConversationTitle(content);
       const userMessage = createUserMessage(content);
       const pendingMessage = createAssistantMessage("正在思考...", "pending");
       const conversation: ChatConversation = {
         id: createId("conversation"),
         modelId: options.modelId,
         projectId: options.projectId,
-        title: createConversationTitle(content),
+        title,
         messages: [userMessage, pendingMessage],
         createdAt: now,
         updatedAt: now,
+        pinnedAt: null,
+        archivedAt: null,
       };
 
       setConversations((currentConversations) => [conversation, ...currentConversations]);
@@ -291,10 +894,13 @@ export function App() {
       setWorkspaceView("conversation");
       void requestAssistantResponse(
         conversation.id,
+        userMessage.id,
         pendingMessage.id,
-        [userMessage],
+        content,
         options.modelId,
         options.projectId,
+        options.attachments,
+        title,
       );
     },
     [requestAssistantResponse],
@@ -316,12 +922,6 @@ export function App() {
       const userMessage = createUserMessage(content);
       const pendingMessage = createAssistantMessage("正在思考...", "pending");
       const now = Date.now();
-      const requestHistory = [
-        ...activeConversationSnapshot.messages.filter(
-          (message) => message.status !== "pending" && message.status !== "error",
-        ),
-        userMessage,
-      ];
 
       setConversations((currentConversations) =>
         currentConversations.map((conversation) =>
@@ -338,10 +938,12 @@ export function App() {
 
       void requestAssistantResponse(
         activeConversationId,
+        userMessage.id,
         pendingMessage.id,
-        requestHistory,
+        content,
         options.modelId,
         activeConversationSnapshot.projectId,
+        options.attachments,
       );
     },
     [activeConversationId, conversations, createConversationFromMessage, requestAssistantResponse],
@@ -351,6 +953,135 @@ export function App() {
     setActiveConversationId(conversationId);
     setWorkspaceView("conversation");
   }, []);
+
+  const togglePinConversation = useCallback((conversationId: string) => {
+    const now = Date.now();
+
+    setConversations((currentConversations) =>
+      currentConversations.map((conversation) =>
+        conversation.id === conversationId
+          ? {
+              ...conversation,
+              pinnedAt: conversation.pinnedAt ? null : now,
+            }
+          : conversation,
+      ),
+    );
+  }, []);
+
+  const archiveConversation = useCallback(
+    (conversationId: string) => {
+      const now = Date.now();
+
+      setConversations((currentConversations) =>
+        currentConversations.map((conversation) =>
+          conversation.id === conversationId
+            ? {
+                ...conversation,
+                archivedAt: now,
+              }
+            : conversation,
+        ),
+      );
+
+      if (activeConversationId === conversationId) {
+        setActiveConversationId(null);
+        setWorkspaceView("blank");
+      }
+    },
+    [activeConversationId],
+  );
+
+  const archiveProjectConversations = useCallback(
+    (projectId: string) => {
+      const now = Date.now();
+      const archivedConversationIds = conversations
+        .filter((conversation) => conversation.projectId === projectId && !conversation.archivedAt)
+        .map((conversation) => conversation.id);
+
+      if (archivedConversationIds.length === 0) return;
+
+      setConversations((currentConversations) =>
+        currentConversations.map((conversation) =>
+          conversation.projectId === projectId && !conversation.archivedAt
+            ? {
+                ...conversation,
+                archivedAt: now,
+              }
+            : conversation,
+        ),
+      );
+
+      if (activeConversationId && archivedConversationIds.includes(activeConversationId)) {
+        setActiveConversationId(null);
+        setWorkspaceView("blank");
+      }
+    },
+    [activeConversationId, conversations],
+  );
+
+  const unarchiveConversation = useCallback((conversationId: string) => {
+    setConversations((currentConversations) =>
+      currentConversations.map((conversation) =>
+        conversation.id === conversationId
+          ? {
+              ...conversation,
+              archivedAt: null,
+            }
+          : conversation,
+      ),
+    );
+  }, []);
+
+  const deleteConversation = useCallback(
+    (conversationId: string) => {
+      setConversations((currentConversations) =>
+        currentConversations.filter((conversation) => conversation.id !== conversationId),
+      );
+
+      void deleteStoredConversation(conversationId).catch((error) => {
+        console.error("Failed to delete conversation from SQLite", error);
+      });
+
+      if (activeConversationId === conversationId) {
+        setActiveConversationId(null);
+        setWorkspaceView("blank");
+      }
+    },
+    [activeConversationId],
+  );
+
+  const deleteArchivedConversations = useCallback(() => {
+    const archivedConversationIds = conversations
+      .filter((conversation) => conversation.archivedAt)
+      .map((conversation) => conversation.id);
+
+    if (archivedConversationIds.length === 0) return;
+
+    setConversations((currentConversations) =>
+      currentConversations.filter((conversation) => !conversation.archivedAt),
+    );
+
+    archivedConversationIds.forEach((conversationId) => {
+      void deleteStoredConversation(conversationId).catch((error) => {
+        console.error("Failed to delete archived conversation from SQLite", error);
+      });
+    });
+
+    if (activeConversationId && archivedConversationIds.includes(activeConversationId)) {
+      setActiveConversationId(null);
+      setWorkspaceView("blank");
+    }
+  }, [activeConversationId, conversations]);
+
+  const handleShowProjectInFolder = useCallback(
+    (projectId: string) => {
+      void showProjectInFolder(projectId).catch((error) => {
+        console.error("Failed to show project in folder", error);
+      });
+    },
+    [showProjectInFolder],
+  );
 
   const stopActiveGeneration = useCallback(() => {
     if (!activeConversationId) return;
@@ -363,6 +1094,12 @@ export function App() {
     if (!pendingMessage) return;
 
     cancelledPendingMessageIdsRef.current.add(pendingMessage.id);
+
+    if (pendingMessage.agentRun?.runId) {
+      cancelledRunIdsRef.current.add(pendingMessage.agentRun.runId);
+      cleanupRunBinding(pendingMessage.agentRun.runId);
+    }
+
     setConversations((currentConversations) =>
       currentConversations.map((conversation) =>
         conversation.id === activeConversationId
@@ -372,8 +1109,14 @@ export function App() {
                 message.id === pendingMessage.id
                   ? {
                       ...message,
-                      content: "已停止生成。",
+                      content: message.content && message.content !== THINKING_PLACEHOLDER ? message.content : "已停止生成。",
                       status: "sent",
+                      agentRun: message.agentRun
+                        ? {
+                            ...message.agentRun,
+                            status: "cancelled",
+                          }
+                        : message.agentRun,
                     }
                   : message,
               ),
@@ -382,10 +1125,125 @@ export function App() {
           : conversation,
       ),
     );
-  }, [activeConversationId, conversations]);
+  }, [activeConversationId, cleanupRunBinding, conversations]);
+
+  const handleApproveAgentAction = useCallback(
+    async (messageId: string, action: AgentProposedAction) => {
+      if (!activeConversationId) return;
+
+      try {
+        const execution = await approveAgentAction(getAgentActionId(action));
+        applyAgentExecutionToMessage(activeConversationId, messageId, execution);
+      } catch (error) {
+        updateAssistantMessage(activeConversationId, messageId, (message) => {
+          const currentRun = ensureAgentRun(message.agentRun, null, "failed");
+
+          return {
+            ...message,
+            status: "error",
+            agentRun: {
+              ...currentRun,
+              error: getErrorMessage(error),
+              timeline: appendTimelineItem(currentRun, {
+                id: `error-${currentRun.timeline.length + 1}`,
+                type: "error",
+                message: getErrorMessage(error),
+              }),
+            },
+          };
+        });
+      }
+    },
+    [activeConversationId, applyAgentExecutionToMessage, updateAssistantMessage],
+  );
+
+  const handleRejectAgentAction = useCallback(
+    async (messageId: string, action: AgentProposedAction) => {
+      if (!activeConversationId) return;
+
+      try {
+        const execution = await rejectAgentAction(getAgentActionId(action));
+        applyAgentExecutionToMessage(activeConversationId, messageId, execution);
+      } catch (error) {
+        updateAssistantMessage(activeConversationId, messageId, (message) => {
+          const currentRun = ensureAgentRun(message.agentRun, null, "failed");
+
+          return {
+            ...message,
+            status: "error",
+            agentRun: {
+              ...currentRun,
+              error: getErrorMessage(error),
+              timeline: appendTimelineItem(currentRun, {
+                id: `error-${currentRun.timeline.length + 1}`,
+                type: "error",
+                message: getErrorMessage(error),
+              }),
+            },
+          };
+        });
+      }
+    },
+    [activeConversationId, applyAgentExecutionToMessage, updateAssistantMessage],
+  );
+
+  const handleCancelAgentAction = useCallback(
+    async (messageId: string, action: AgentProposedAction) => {
+      if (!activeConversationId) return;
+
+      try {
+        await cancelAgentAction(getAgentActionId(action));
+        updateAssistantMessage(activeConversationId, messageId, (message) => {
+          const currentRun = ensureAgentRun(message.agentRun, null, "cancelled");
+
+          return {
+            ...message,
+            status: "sent",
+            agentRun: {
+              ...currentRun,
+              status: "cancelled",
+              timeline: appendTimelineItem(currentRun, {
+                id: `cancel-${getAgentActionId(action)}`,
+                type: "error",
+                message: "已取消该操作。",
+              }),
+            },
+          };
+        });
+      } catch (error) {
+        updateAssistantMessage(activeConversationId, messageId, (message) => {
+          const currentRun = ensureAgentRun(message.agentRun, null, "failed");
+
+          return {
+            ...message,
+            status: "error",
+            agentRun: {
+              ...currentRun,
+              error: getErrorMessage(error),
+              timeline: appendTimelineItem(currentRun, {
+                id: `error-${currentRun.timeline.length + 1}`,
+                type: "error",
+                message: getErrorMessage(error),
+              }),
+            },
+          };
+        });
+      }
+    },
+    [activeConversationId, updateAssistantMessage],
+  );
 
   if (view === "settings") {
-    return <SettingsPage onBack={() => setView("workspace")} />;
+    return (
+      <SettingsPage
+        conversations={conversations}
+        projects={projects}
+        onBack={() => setView("workspace")}
+        onDeleteAllArchivedConversations={deleteArchivedConversations}
+        onDeleteConversation={deleteConversation}
+        onUnarchiveConversation={unarchiveConversation}
+      />
+    );
   }
 
   return (
@@ -407,9 +1265,16 @@ export function App() {
           activeConversationId={activeConversationId}
           conversations={conversations}
           projects={projects}
+          onArchiveConversation={archiveConversation}
+          onArchiveProjectConversations={archiveProjectConversations}
           onNewConversation={startNewConversation}
           onOpenSettings={() => setView("settings")}
+          onRemoveProject={deleteProject}
+          onRenameProject={renameProject}
+          onShowProjectInFolder={handleShowProjectInFolder}
           onSelectConversation={selectConversation}
+          onTogglePinConversation={togglePinConversation}
+          onTogglePinProject={togglePinProject}
         />
       </div>
 
@@ -451,6 +1316,9 @@ export function App() {
           {workspaceView === "conversation" && activeConversation && (
             <ChatConversationPage
               conversation={activeConversation}
+              onApproveAgentAction={handleApproveAgentAction}
+              onCancelAgentAction={handleCancelAgentAction}
+              onRejectAgentAction={handleRejectAgentAction}
               onStopGenerating={stopActiveGeneration}
               onSubmitMessage={appendMessageToActiveConversation}
             />

@@ -17,18 +17,18 @@ impl AgentTool for ReadSpreadsheetTool {
     fn definition(&self) -> AgentToolDefinition {
         AgentToolDefinition {
             name: "read_spreadsheet".to_string(),
-            description: "Extract text from spreadsheet files (.xlsx, .xls, .csv, .tsv) inside the selected workspace.".to_string(),
+            description: "Extract text from spreadsheet files (.xlsx, .xls, .csv, .tsv) in the selected workspace or an @attachments path.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string", "description": "Workspace-relative spreadsheet path." },
+                    "path": { "type": "string", "description": "Workspace-relative spreadsheet path or @attachments/... readPath." },
                     "filePath": { "type": "string", "description": "Alias for path." },
                     "maxChars": { "type": "integer", "minimum": 1, "maximum": MAX_DOCUMENT_TEXT_CHARS }
                 },
                 "required": ["path"]
             }),
             safety: AgentToolSafety::ReadOnly,
-            requires_workspace: true,
+            requires_workspace: false,
             requires_approval: false,
         }
     }
@@ -302,6 +302,7 @@ mod tests {
                     display_name: Some("test".to_string()),
                     root_path: Some(self.root.to_string_lossy().to_string()),
                 }),
+                attachment_library: None,
             }))
         }
     }

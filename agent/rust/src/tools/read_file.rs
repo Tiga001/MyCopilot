@@ -1,6 +1,5 @@
 use super::{
-    relative_display, AgentTool, ToolExecutionContext, DEFAULT_READ_MAX_LINES, MAX_READ_FILE_BYTES,
-    MAX_READ_LINES,
+    AgentTool, ToolExecutionContext, DEFAULT_READ_MAX_LINES, MAX_READ_FILE_BYTES, MAX_READ_LINES,
 };
 use crate::protocol::{AgentError, AgentResult, AgentToolDefinition, AgentToolSafety};
 use serde::Deserialize;
@@ -14,12 +13,12 @@ impl AgentTool for ReadFileTool {
         AgentToolDefinition {
             name: "read_file".to_string(),
             description:
-                "Read a UTF-8 text file inside the selected workspace with optional line bounds."
+                "Read a UTF-8 text file from the selected workspace or an @attachments path with optional line bounds."
                     .to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string", "description": "Workspace-relative file path." },
+                    "path": { "type": "string", "description": "Workspace-relative file path or @attachments/... readPath." },
                     "filePath": { "type": "string", "description": "Alias for path." },
                     "startLine": { "type": "integer", "minimum": 1 },
                     "maxLines": { "type": "integer", "minimum": 1, "maximum": MAX_READ_LINES }
@@ -27,7 +26,7 @@ impl AgentTool for ReadFileTool {
                 "required": ["path"]
             }),
             safety: AgentToolSafety::ReadOnly,
-            requires_workspace: true,
+            requires_workspace: false,
             requires_approval: false,
         }
     }
@@ -66,7 +65,7 @@ impl AgentTool for ReadFileTool {
         let selected = lines[start_index..end_index].join("\n");
 
         Ok(json!({
-            "path": relative_display(&context.workspace_root()?, &file_path),
+            "path": context.display_path(path, &file_path)?,
             "startLine": start_index + 1,
             "endLine": end_index,
             "totalLines": total_lines,
@@ -158,6 +157,7 @@ mod tests {
                     display_name: Some("test".to_string()),
                     root_path: Some(self.root.to_string_lossy().to_string()),
                 }),
+                attachment_library: None,
             }))
         }
     }

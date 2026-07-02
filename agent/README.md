@@ -93,11 +93,13 @@ tool/function calling。
 - TypeScript: `agent/typescript/src/protocol.ts`
 - Rust: `agent/rust/src/protocol.rs`
 
-当前同步命令仍是：
+当前前端入口是：
 
 ```text
-agent_send_chat(input: AgentChatInput) -> AgentChatOutput
+agent_start_conversation_turn(input: AgentConversationTurnInput) -> AgentConversationTurnOutput
 ```
 
-`AgentChatOutput.content` 用于现有 UI，`events` / `toolDefinitions` / `proposedActions`
-用于后续流式输出、工具调用、diff 展示和审批流程。
+前端只提交当前用户输入、conversation/project/model/message id。Tauri 从 SQLite 读取模型配置、
+搜索配置、项目 workspace 和数据库历史消息，构建内部 `AgentChatInput` 后调用 `agent/rust`。
+`AgentEvent` 通过 Tauri 窗口事件 `agent_event` 推送给前端，`AgentChatOutput` 仍用于审批执行后的
+后端回灌结果和内部状态更新。

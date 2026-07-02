@@ -15,7 +15,10 @@ export type AgentApiStyle = "openai_compatible" | "anthropic_compatible";
 export type AgentSearchMode = "auto" | "disabled" | "tavily";
 
 export type AgentToolName =
+  | "attachments_list"
+  | "attachments_list_project"
   | "read_file"
+  | "read_image"
   | "read_pdf"
   | "read_word"
   | "read_presentation"
@@ -50,16 +53,54 @@ export interface AgentChatMessage {
   content: string;
 }
 
+export type AgentInputAttachmentKind = "file" | "image";
+
+export type AgentInputAttachmentEncoding = "utf8" | "base64";
+
+export interface AgentInputAttachment {
+  id: string;
+  kind: AgentInputAttachmentKind;
+  name: string;
+  mimeType?: string;
+  sizeBytes: number;
+  encoding: AgentInputAttachmentEncoding;
+  data: string;
+  truncated?: boolean;
+}
+
 export interface AgentWorkspaceContext {
   projectId?: string;
   displayName?: string;
   rootPath?: string;
 }
 
+export interface AgentAttachmentReference {
+  id: string;
+  conversationId: string;
+  messageId: string;
+  projectId?: string | null;
+  kind: AgentInputAttachmentKind;
+  name: string;
+  mimeType?: string;
+  sizeBytes: number;
+  readPath: string;
+  storageRelPath: string;
+  createdAt: number;
+}
+
+export interface AgentAttachmentLibraryContext {
+  rootPath?: string;
+  conversationId?: string;
+  projectId?: string | null;
+  conversationAttachments: AgentAttachmentReference[];
+  projectAttachments: AgentAttachmentReference[];
+}
+
 export interface AgentRunContext {
   conversationId?: string;
   projectId?: string | null;
   workspace?: AgentWorkspaceContext;
+  attachmentLibrary?: AgentAttachmentLibraryContext;
 }
 
 export interface AgentSearchConfig {
@@ -71,21 +112,6 @@ export interface AgentApprovalDecision {
   actionId: string;
   status: AgentApprovalDecisionStatus;
   message?: string;
-}
-
-export interface AgentChatInput {
-  apiUrl: string;
-  apiToken: string;
-  model: string;
-  apiStyle?: AgentApiStyle;
-  maxTokens?: number;
-  temperature?: number;
-  mode?: AgentRunMode;
-  stream?: boolean;
-  context?: AgentRunContext;
-  searchConfig?: AgentSearchConfig;
-  approvalDecision?: AgentApprovalDecision;
-  messages: AgentChatMessage[];
 }
 
 export interface AgentUsage {
@@ -103,6 +129,38 @@ export interface AgentChatOutput {
   usage?: AgentUsage;
   finishReason?: string;
   proposedActions: AgentProposedAction[];
+}
+
+export interface AgentConversationTurnInput {
+  conversationId?: string;
+  projectId?: string | null;
+  modelId: string;
+  content: string;
+  attachments?: AgentInputAttachment[];
+  title?: string;
+  userMessageId?: string;
+  assistantMessageId?: string;
+  maxTokens?: number;
+  temperature?: number;
+  mode?: AgentRunMode;
+}
+
+export interface AgentConversationMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: number;
+  status?: "pending" | "sent" | "error" | null;
+}
+
+export interface AgentConversationTurnOutput {
+  runId: string;
+  eventName: string;
+  conversationId: string;
+  userMessageId: string;
+  assistantMessageId: string;
+  userMessage: AgentConversationMessage;
+  assistantMessage: AgentConversationMessage;
 }
 
 export interface AgentStateSnapshot {

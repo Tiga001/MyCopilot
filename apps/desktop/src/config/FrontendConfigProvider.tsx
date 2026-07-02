@@ -4,10 +4,10 @@ import {
   FRONTEND_CONFIG_STORAGE_KEY,
   frontendConfig,
   getFrontendCssVariables,
-  languageOptions,
-  translations,
 } from "./frontendConfig";
-import type { AppLanguage, FrontendConfig, TranslationKey } from "./frontendConfig";
+import { languageOptions, translations } from "./frontendTranslations";
+import type { FrontendConfig } from "./frontendConfig";
+import type { AppLanguage, TranslationKey } from "./frontendTranslations";
 
 interface StoredFrontendConfig {
   language?: AppLanguage;

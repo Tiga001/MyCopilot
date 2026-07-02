@@ -4,7 +4,7 @@
   background: var(--mc-color-surface-app);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
-  --titlebar-height: 52px;
+  --titlebar-height: var(--mc-layout-titlebar-height);
   --hairline: var(--mc-color-border-hairline);
   --left-panel: var(--mc-color-surface-left-panel);
   --main-panel: var(--mc-color-surface-main-panel);
@@ -123,7 +123,7 @@ button {
   color: var(--mc-color-icon-muted);
   background: transparent;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--mc-radius-sm);
   cursor: pointer;
   pointer-events: auto;
   transition:
@@ -135,7 +135,7 @@ button {
 .panel-toggle svg {
   width: 18px;
   height: 18px;
-  stroke-width: 1.75;
+  stroke-width: var(--mc-icon-stroke-thin);
 }
 
 .panel-toggle:hover {
@@ -168,8 +168,8 @@ button {
   overflow: hidden;
   margin: 0;
   color: var(--mc-color-text-strong);
-  font-size: 15px;
-  font-weight: 650;
+  font-size: var(--mc-font-size-md);
+  font-weight: var(--mc-font-weight-strong);
   line-height: var(--titlebar-height);
   text-align: center;
   text-overflow: ellipsis;
@@ -201,7 +201,7 @@ button {
 
 .resize-handle:hover::after,
 .is-resizing .resize-handle::after {
-  background: rgba(63, 112, 206, 0.55);
+  background: var(--mc-color-resize-handle);
 }
 
 .resize-handle--left {

@@ -1,5 +1,24 @@
 use rusqlite::Connection;
 
+fn add_column_if_missing(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> rusqlite::Result<()> {
+    connection
+        .execute_batch(&format!(
+            "ALTER TABLE {table} ADD COLUMN {column} {definition};"
+        ))
+        .or_else(|error| {
+            if error.to_string().contains("duplicate column name") {
+                Ok(())
+            } else {
+                Err(error)
+            }
+        })
+}
+
 pub fn run_migrations(connection: &Connection) -> rusqlite::Result<()> {
     connection.execute_batch(
         "
@@ -33,6 +52,7 @@ pub fn run_migrations(connection: &Connection) -> rusqlite::Result<()> {
             name TEXT NOT NULL,
             path TEXT,
             created_at INTEGER NOT NULL,
+            pinned_at INTEGER,
             updated_at INTEGER NOT NULL
         );
 
@@ -42,9 +62,33 @@ pub fn run_migrations(connection: &Connection) -> rusqlite::Result<()> {
             model_id TEXT,
             title TEXT NOT NULL,
             created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL
+            updated_at INTEGER NOT NULL,
+            pinned_at INTEGER,
+            archived_at INTEGER
         );
 
+        CREATE TABLE IF NOT EXISTS attachments (
+            id TEXT PRIMARY KEY,
+            conversation_id TEXT NOT NULL,
+            message_id TEXT NOT NULL,
+            project_id TEXT,
+            kind TEXT NOT NULL,
+            original_name TEXT NOT NULL,
+            mime_type TEXT,
+            size_bytes INTEGER NOT NULL,
+            storage_rel_path TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+        );
+        ",
+    )?;
+
+    add_column_if_missing(connection, "projects", "pinned_at", "INTEGER")?;
+    add_column_if_missing(connection, "conversations", "pinned_at", "INTEGER")?;
+    add_column_if_missing(connection, "conversations", "archived_at", "INTEGER")?;
+
+    connection.execute_batch(
+        "
         CREATE TABLE IF NOT EXISTS messages (
             id TEXT PRIMARY KEY,
             conversation_id TEXT NOT NULL,
@@ -59,8 +103,13 @@ pub fn run_migrations(connection: &Connection) -> rusqlite::Result<()> {
         CREATE INDEX IF NOT EXISTS idx_models_position ON models(position);
         CREATE INDEX IF NOT EXISTS idx_projects_updated_at ON projects(updated_at);
         CREATE INDEX IF NOT EXISTS idx_conversations_project_id ON conversations(project_id);
+        CREATE INDEX IF NOT EXISTS idx_conversations_pinned_at ON conversations(pinned_at);
+        CREATE INDEX IF NOT EXISTS idx_conversations_archived_at ON conversations(archived_at);
         CREATE INDEX IF NOT EXISTS idx_conversations_updated_at ON conversations(updated_at);
         CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation_id, position);
+        CREATE INDEX IF NOT EXISTS idx_attachments_conversation_id ON attachments(conversation_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_attachments_project_id ON attachments(project_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_attachments_message_id ON attachments(message_id);
         ",
     )
 }

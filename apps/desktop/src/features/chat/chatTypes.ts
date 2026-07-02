@@ -1,14 +1,60 @@
+import type {
+  AgentCommandOutputStream,
+  AgentDiffProposal,
+  AgentInputAttachment,
+  AgentProposedAction,
+  AgentRunStatus,
+  AgentStateSnapshot,
+  AgentToolCall,
+  AgentToolDefinition,
+  AgentToolResult,
+  AgentUsage,
+} from "@agent";
+
+export interface ChatAgentCommandOutput {
+  id: string;
+  command: string;
+  stream: AgentCommandOutputStream;
+  output: string;
+}
+
+export type ChatAgentTimelineItem =
+  | { id: string; type: "message"; content: string }
+  | { id: string; type: "tool_call"; callId: string }
+  | { id: string; type: "diff"; diffId: string }
+  | { id: string; type: "approval"; actionId: string }
+  | { id: string; type: "command_output"; outputId: string }
+  | { id: string; type: "error"; message: string };
+
+export interface ChatAgentRunView {
+  runId: string | null;
+  status: AgentRunStatus | "starting";
+  toolDefinitions: AgentToolDefinition[];
+  toolCalls: AgentToolCall[];
+  toolResults: AgentToolResult[];
+  approvals: AgentProposedAction[];
+  diffs: AgentDiffProposal[];
+  commandOutputs: ChatAgentCommandOutput[];
+  timeline: ChatAgentTimelineItem[];
+  state?: AgentStateSnapshot;
+  error?: string;
+  usage?: AgentUsage;
+  finishReason?: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
   createdAt: number;
   status?: "pending" | "sent" | "error";
+  agentRun?: ChatAgentRunView;
 }
 
 export interface ChatSubmitOptions {
   modelId: string;
   projectId: string | null;
+  attachments?: AgentInputAttachment[];
 }
 
 export interface ChatConversation {
@@ -19,4 +65,6 @@ export interface ChatConversation {
   messages: ChatMessage[];
   createdAt: number;
   updatedAt: number;
+  pinnedAt?: number | null;
+  archivedAt?: number | null;
 }

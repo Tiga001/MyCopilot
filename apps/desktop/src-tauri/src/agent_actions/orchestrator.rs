@@ -4,6 +4,7 @@ use crate::git::diff::{read_git_diff, GitDiffSnapshot};
 use crate::process::command_runner::{
     run_approved_command, CommandExecutionResult, CommandRunState,
 };
+use crate::storage::{chat_repository, now_ms, StorageState};
 use my_copilot_agent::{
     send_chat, AgentApprovalDecision, AgentApprovalDecisionStatus, AgentChatInput,
     AgentChatMessage, AgentChatOutput, AgentCommandRequest, AgentDiffProposal, AgentProposedAction,
@@ -68,16 +69,18 @@ pub struct AgentCommandExecutionResult {
 pub async fn approve_action(
     action_state: &AgentActionState,
     command_state: &CommandRunState,
+    storage_state: &StorageState,
     action_id: String,
 ) -> Result<AgentActionExecutionOutput, String> {
     let pending = action_state.take(&action_id)?;
 
     match pending.action.clone() {
         AgentProposedAction::Diff { diff } => {
-            approve_diff_action(action_state, pending, diff).await
+            approve_diff_action(action_state, storage_state, pending, diff).await
         }
         AgentProposedAction::Command { command } => {
-            approve_command_action(action_state, command_state, pending, command).await
+            approve_command_action(action_state, command_state, storage_state, pending, command)
+                .await
         }
         AgentProposedAction::ToolCall { call } => {
             Err(format!("暂不支持审批执行通用 tool_call：{}", call.tool))
@@ -87,6 +90,7 @@ pub async fn approve_action(
 
 pub async fn reject_action(
     action_state: &AgentActionState,
+    storage_state: &StorageState,
     action_id: String,
     message: Option<String>,
 ) -> Result<AgentActionExecutionOutput, String> {
@@ -103,7 +107,13 @@ pub async fn reject_action(
     let agent_output = send_chat(input.clone())
         .await
         .map_err(|error| error.to_string())?;
-    action_state.store_output_actions(&input, &agent_output);
+    action_state.store_output_actions_with_message(
+        &input,
+        &agent_output,
+        pending.conversation_id.clone(),
+        pending.assistant_message_id.clone(),
+    );
+    persist_assistant_output(storage_state, &pending, &agent_output);
 
     Ok(AgentActionExecutionOutput {
         action_id: pending.action_id,
@@ -118,6 +128,7 @@ pub async fn reject_action(
 
 async fn approve_diff_action(
     action_state: &AgentActionState,
+    storage_state: &StorageState,
     pending: PendingAgentAction,
     diff: AgentDiffProposal,
 ) -> Result<AgentActionExecutionOutput, String> {
@@ -156,7 +167,13 @@ async fn approve_diff_action(
     let agent_output = send_chat(input.clone())
         .await
         .map_err(|error| error.to_string())?;
-    action_state.store_output_actions(&input, &agent_output);
+    action_state.store_output_actions_with_message(
+        &input,
+        &agent_output,
+        pending.conversation_id.clone(),
+        pending.assistant_message_id.clone(),
+    );
+    persist_assistant_output(storage_state, &pending, &agent_output);
 
     Ok(AgentActionExecutionOutput {
         action_id: pending.action_id,
@@ -172,6 +189,7 @@ async fn approve_diff_action(
 async fn approve_command_action(
     action_state: &AgentActionState,
     command_state: &CommandRunState,
+    storage_state: &StorageState,
     pending: PendingAgentAction,
     command: AgentCommandRequest,
 ) -> Result<AgentActionExecutionOutput, String> {
@@ -219,7 +237,13 @@ async fn approve_command_action(
     let agent_output = send_chat(input.clone())
         .await
         .map_err(|error| error.to_string())?;
-    action_state.store_output_actions(&input, &agent_output);
+    action_state.store_output_actions_with_message(
+        &input,
+        &agent_output,
+        pending.conversation_id.clone(),
+        pending.assistant_message_id.clone(),
+    );
+    persist_assistant_output(storage_state, &pending, &agent_output);
 
     Ok(AgentActionExecutionOutput {
         action_id: pending.action_id,
@@ -337,6 +361,42 @@ fn successful_command_execution(result: CommandExecutionResult) -> CommandExecut
                 Some("命令执行失败、超时、被取消或返回非零 exit code。".to_string())
             },
         },
+    }
+}
+
+fn persist_assistant_output(
+    storage_state: &StorageState,
+    pending: &PendingAgentAction,
+    output: &AgentChatOutput,
+) {
+    let (Some(conversation_id), Some(assistant_message_id)) = (
+        pending.conversation_id.as_deref(),
+        pending.assistant_message_id.as_deref(),
+    ) else {
+        return;
+    };
+    let Ok(connection) = storage_state.connection() else {
+        return;
+    };
+    let _ = chat_repository::update_message_status_and_content(
+        &connection,
+        conversation_id,
+        assistant_message_id,
+        &output.content,
+        status_for_run(output.status),
+        now_ms(),
+    );
+}
+
+fn status_for_run(status: my_copilot_agent::AgentRunStatus) -> Option<&'static str> {
+    match status {
+        my_copilot_agent::AgentRunStatus::Completed => Some("sent"),
+        my_copilot_agent::AgentRunStatus::WaitingForApproval
+        | my_copilot_agent::AgentRunStatus::Running
+        | my_copilot_agent::AgentRunStatus::Idle => Some("pending"),
+        my_copilot_agent::AgentRunStatus::Failed | my_copilot_agent::AgentRunStatus::Cancelled => {
+            Some("error")
+        }
     }
 }
 

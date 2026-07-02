@@ -35,6 +35,7 @@ interface PersistedProject {
   name: string;
   path: string | null;
   createdAt: number;
+  pinnedAt: number | null;
 }
 
 interface PersistedChatMessage {
@@ -53,6 +54,8 @@ interface PersistedChatConversation {
   messages: PersistedChatMessage[];
   createdAt: number;
   updatedAt: number;
+  pinnedAt: number | null;
+  archivedAt: number | null;
 }
 
 export interface AppDataSnapshot {
@@ -94,6 +97,11 @@ export async function loadProjects(): Promise<AppProject[]> {
   return projects.map(mapProjectFromPersistence);
 }
 
+export async function selectProjectDirectory(): Promise<AppProject | null> {
+  const project = await invoke<PersistedProject | null>("select_project_directory");
+  return project ? mapProjectFromPersistence(project) : null;
+}
+
 export async function saveProject(project: AppProject): Promise<AppProject> {
   const savedProject = await invoke<PersistedProject>("save_project", {
     project: mapProjectToPersistence(project),
@@ -103,6 +111,10 @@ export async function saveProject(project: AppProject): Promise<AppProject> {
 
 export async function deleteStoredProject(projectId: string): Promise<void> {
   await invoke("delete_project", { projectId });
+}
+
+export async function showStoredProjectInFolder(projectId: string): Promise<void> {
+  await invoke("show_project_in_folder", { projectId });
 }
 
 export async function loadConversations(): Promise<ChatConversation[]> {
@@ -115,6 +127,10 @@ export async function saveConversation(conversation: ChatConversation): Promise<
     conversation: mapConversationToPersistence(conversation),
   });
   return mapConversationFromPersistence(savedConversation);
+}
+
+export async function deleteStoredConversation(conversationId: string): Promise<void> {
+  await invoke("delete_conversation", { conversationId });
 }
 
 function mapModelSettingsFromPersistence(settings: PersistedModelSettingsSnapshot): ModelSettingsSnapshot {
@@ -144,6 +160,7 @@ function mapProjectFromPersistence(project: PersistedProject): AppProject {
   return {
     ...project,
     path: project.path ?? undefined,
+    pinnedAt: project.pinnedAt ?? null,
   };
 }
 
@@ -151,20 +168,30 @@ function mapProjectToPersistence(project: AppProject): PersistedProject {
   return {
     ...project,
     path: project.path ?? null,
+    pinnedAt: project.pinnedAt ?? null,
   };
 }
 
 function mapConversationFromPersistence(conversation: PersistedChatConversation): ChatConversation {
   return {
     ...conversation,
+    archivedAt: conversation.archivedAt ?? null,
+    pinnedAt: conversation.pinnedAt ?? null,
     messages: conversation.messages.map(mapMessageFromPersistence),
   };
 }
 
 function mapConversationToPersistence(conversation: ChatConversation): PersistedChatConversation {
   return {
-    ...conversation,
+    id: conversation.id,
+    projectId: conversation.projectId,
+    modelId: conversation.modelId,
+    title: conversation.title,
     messages: conversation.messages.map(mapMessageToPersistence),
+    createdAt: conversation.createdAt,
+    updatedAt: conversation.updatedAt,
+    pinnedAt: conversation.pinnedAt ?? null,
+    archivedAt: conversation.archivedAt ?? null,
   };
 }
 
@@ -177,7 +204,10 @@ function mapMessageFromPersistence(message: PersistedChatMessage): ChatMessage {
 
 function mapMessageToPersistence(message: ChatMessage): PersistedChatMessage {
   return {
-    ...message,
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    createdAt: message.createdAt,
     status: message.status ?? null,
   };
 }

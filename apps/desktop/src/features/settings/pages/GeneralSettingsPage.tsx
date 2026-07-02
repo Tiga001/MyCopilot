@@ -1,5 +1,5 @@
 import { useFrontendConfig } from "../../../config/FrontendConfigProvider";
-import type { AppLanguage } from "../../../config/frontendConfig";
+import type { AppLanguage } from "../../../config/frontendTranslations";
 import "./GeneralSettingsPage.css";
 
 export function GeneralSettingsPage() {

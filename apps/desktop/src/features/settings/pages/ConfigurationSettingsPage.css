@@ -15,9 +15,9 @@
   margin: 0;
   color: var(--mc-color-text-strong);
   font-size: var(--mc-font-size-configuration-title);
-  font-weight: 760;
+  font-weight: var(--mc-font-weight-display);
   letter-spacing: -0.03em;
-  line-height: 1.2;
+  line-height: var(--mc-line-height-compact);
 }
 
 .configuration-form-block {
@@ -29,8 +29,8 @@
   margin: 0;
   color: var(--mc-color-text-strong);
   font-size: var(--mc-font-size-configuration-heading);
-  font-weight: 720;
-  line-height: 1.3;
+  font-weight: var(--mc-font-weight-black);
+  line-height: var(--mc-line-height-normal);
 }
 
 .configuration-field {
@@ -39,7 +39,7 @@
   gap: 14px;
   color: var(--mc-color-text-secondary);
   font-size: var(--mc-font-size-configuration-label);
-  font-weight: 500;
+  font-weight: var(--mc-font-weight-regular);
 }
 
 .configuration-field input,
@@ -50,11 +50,11 @@
   color: var(--mc-color-text-strong);
   background: var(--mc-color-surface-elevated);
   border: 1px solid var(--mc-color-border-strong);
-  border-radius: 14px;
+  border-radius: var(--mc-radius-row);
   outline: 0;
   font: inherit;
   font-size: var(--mc-font-size-configuration-control);
-  font-weight: 450;
+  font-weight: var(--mc-font-weight-control);
 }
 
 .configuration-field input::placeholder {
@@ -78,7 +78,7 @@
 .configuration-field input:focus,
 .configuration-field select:focus {
   border-color: var(--mc-color-focus-ring);
-  box-shadow: 0 0 0 3px rgba(45, 105, 210, 0.12);
+  box-shadow: var(--mc-shadow-focus);
 }
 
 .available-models-heading {
@@ -95,7 +95,7 @@
   padding: 10px 18px;
   background: var(--mc-color-surface-elevated);
   border: 1px solid var(--mc-color-border-subtle);
-  border-radius: 16px;
+  border-radius: var(--mc-radius-card);
 }
 
 .available-model-row {
@@ -122,7 +122,7 @@
   place-items: center;
   color: var(--mc-color-text-inverse);
   background: var(--mc-color-button-primary-bg);
-  border-radius: 7px;
+  border-radius: var(--mc-radius-xs);
 }
 
 .available-model-row input:not(:checked) + .available-model-row__check {
@@ -134,7 +134,7 @@
 .available-model-row__check svg {
   width: 18px;
   height: 18px;
-  stroke-width: 3;
+  stroke-width: var(--mc-icon-stroke-ultra);
 }
 
 .available-model-row__name {
@@ -153,9 +153,9 @@
   padding: 0 14px;
   color: var(--mc-color-text-muted);
   background: var(--mc-color-surface-neutral-subtle);
-  border-radius: 999px;
-  font-size: 16px;
-  font-weight: 700;
+  border-radius: var(--mc-radius-pill);
+  font-size: var(--mc-font-size-base);
+  font-weight: var(--mc-font-weight-heavy);
 }
 
 .model-capability-pill[data-supported="true"] {
@@ -178,10 +178,10 @@
   height: 46px;
   padding: 0 22px;
   gap: 8px;
-  border-radius: 12px;
+  border-radius: var(--mc-radius-2xl);
   font: inherit;
-  font-size: 17px;
-  font-weight: 720;
+  font-size: var(--mc-font-size-lg);
+  font-weight: var(--mc-font-weight-black);
   cursor: pointer;
 }
 
@@ -196,9 +196,9 @@
 }
 
 .secondary-settings-button--accent svg {
-  width: 18px;
-  height: 18px;
-  stroke-width: 2.8;
+  width: var(--mc-icon-size-base);
+  height: var(--mc-icon-size-base);
+  stroke-width: var(--mc-icon-stroke-extra-black);
 }
 
 .primary-settings-button {
@@ -250,8 +250,8 @@
 .model-manager-page__header p {
   margin: 26px 0 0;
   color: var(--mc-color-text-muted);
-  font-size: 18px;
-  line-height: 1.45;
+  font-size: var(--mc-font-size-xl);
+  line-height: var(--mc-line-height-relaxed);
 }
 
 .model-manager-table {
@@ -271,8 +271,8 @@
 .model-manager-table__row--head {
   min-height: 40px;
   color: var(--mc-color-text-muted);
-  font-size: 16px;
-  font-weight: 760;
+  font-size: var(--mc-font-size-base);
+  font-weight: var(--mc-font-weight-display);
 }
 
 .model-manager-table__model {
@@ -285,8 +285,8 @@
   overflow: hidden;
   color: var(--mc-color-text-strong);
   font-size: var(--mc-font-size-configuration-table);
-  font-weight: 760;
-  line-height: 1.2;
+  font-weight: var(--mc-font-weight-display);
+  line-height: var(--mc-line-height-compact);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -294,8 +294,8 @@
 .model-manager-table__model small {
   overflow: hidden;
   color: var(--mc-color-text-muted);
-  font-size: 16px;
-  line-height: 1.25;
+  font-size: var(--mc-font-size-base);
+  line-height: var(--mc-line-height-metadata);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -304,7 +304,7 @@
   color: var(--mc-color-text-strong);
   font-family: var(--mc-mono-font-family);
   font-size: var(--mc-font-size-configuration-table);
-  font-weight: 760;
+  font-weight: var(--mc-font-weight-display);
 }
 
 .model-manager-table__actions {
@@ -319,8 +319,8 @@
   align-items: center;
   gap: 10px;
   color: var(--mc-color-text-danger);
-  font-size: 15px;
-  font-weight: 720;
+  font-size: var(--mc-font-size-md);
+  font-weight: var(--mc-font-weight-black);
 }
 
 .delete-confirmation .secondary-settings-button,
@@ -328,7 +328,7 @@
   min-width: 76px;
   height: 38px;
   padding: 0 14px;
-  font-size: 15px;
+  font-size: var(--mc-font-size-md);
 }
 
 .model-manager-page__footer {
@@ -357,8 +357,8 @@
   margin-top: 20px;
   gap: 10px;
   color: var(--mc-color-text-secondary);
-  font-size: 18px;
-  font-weight: 600;
+  font-size: var(--mc-font-size-xl);
+  font-weight: var(--mc-font-weight-bold);
   cursor: pointer;
 }
 

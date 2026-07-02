@@ -12,18 +12,20 @@ impl AgentTool for ReadPdfTool {
     fn definition(&self) -> AgentToolDefinition {
         AgentToolDefinition {
             name: "read_pdf".to_string(),
-            description: "Extract text from a PDF file inside the selected workspace.".to_string(),
+            description:
+                "Extract text from a PDF file in the selected workspace or an @attachments path."
+                    .to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string", "description": "Workspace-relative .pdf path." },
+                    "path": { "type": "string", "description": "Workspace-relative .pdf path or @attachments/... readPath." },
                     "filePath": { "type": "string", "description": "Alias for path." },
                     "maxChars": { "type": "integer", "minimum": 1, "maximum": MAX_DOCUMENT_TEXT_CHARS }
                 },
                 "required": ["path"]
             }),
             safety: AgentToolSafety::ReadOnly,
-            requires_workspace: true,
+            requires_workspace: false,
             requires_approval: false,
         }
     }
