@@ -1,6 +1,11 @@
 import {
   Archive,
+  ArrowDown,
+  ArrowUp,
+  Check,
   ChevronDown,
+  Clock3,
+  Folder,
   FolderOpen,
   MoreHorizontal,
   NotebookText,
@@ -10,17 +15,29 @@ import {
   SquarePen,
   X,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { useFrontendConfig } from "../../config/FrontendConfigProvider";
 import type { AppProject } from "../../config/projectConfig";
 import type { ChatConversation } from "../../features/chat/chatTypes";
+import type {
+  SidebarConversationSort,
+  SidebarProjectSort,
+  UiPreferencesSnapshot,
+} from "../../features/storage/storageClient";
+import { useDismissOnOutsidePointer } from "../../hooks/useDismissOnOutsidePointer";
 import "./LeftSidebar.css";
+
+type SidebarSectionScope = "projects" | "conversations";
+type SidebarSectionSubmenu = "organize" | "sort";
+type BulkArchiveScope = "projects" | "root";
 
 interface LeftSidebarProps {
   activeConversationId: string | null;
   conversations: ChatConversation[];
   isNewConversationActive: boolean;
+  onArchiveAllProjectConversations: () => void;
+  onArchiveAllRootConversations: () => void;
   onArchiveConversation: (conversationId: string) => void;
   onArchiveProjectConversations: (projectId: string) => void;
   onNewConversation: (projectId?: string | null) => void;
@@ -31,7 +48,9 @@ interface LeftSidebarProps {
   onShowProjectInFolder: (projectId: string) => void;
   onTogglePinConversation: (conversationId: string) => void;
   onTogglePinProject: (projectId: string) => void;
+  onUiPreferencesChange: (patch: Partial<UiPreferencesSnapshot>) => void;
   projects: AppProject[];
+  uiPreferences: UiPreferencesSnapshot;
 }
 
 function formatTemplate(template: string, values: Record<string, number | string>) {
@@ -74,7 +93,7 @@ function formatConversationAge(updatedAt: number, now: number, language: string,
   return language === "zh-CN" ? `${Math.max(1, years)} 年` : `${Math.max(1, years)}y`;
 }
 
-function sortConversations(conversations: ChatConversation[]) {
+function sortConversations(conversations: ChatConversation[], sort: SidebarConversationSort) {
   return [...conversations].sort((a, b) => {
     const aPinned = a.pinnedAt ?? 0;
     const bPinned = b.pinnedAt ?? 0;
@@ -84,6 +103,7 @@ function sortConversations(conversations: ChatConversation[]) {
       return aPinned ? -1 : 1;
     }
 
+    if (sort === "created") return b.createdAt - a.createdAt;
     return b.updatedAt - a.updatedAt;
   });
 }
@@ -94,10 +114,26 @@ function sortPinnedProjects(projects: AppProject[]) {
     .sort((a, b) => (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0));
 }
 
-function sortRegularProjects(projects: AppProject[]) {
+function sortRegularProjects(
+  projects: AppProject[],
+  conversationsByProjectId: Record<string, ChatConversation[]>,
+  sort: SidebarProjectSort,
+) {
   return [...projects]
     .filter((project) => !project.pinnedAt)
-    .sort((a, b) => a.createdAt - b.createdAt);
+    .sort((a, b) => {
+      if (sort === "recent") {
+        const aRecent = latestProjectConversationUpdatedAt(conversationsByProjectId[a.id] ?? []);
+        const bRecent = latestProjectConversationUpdatedAt(conversationsByProjectId[b.id] ?? []);
+        if (aRecent !== bRecent) return bRecent - aRecent;
+      }
+
+      return a.createdAt - b.createdAt;
+    });
+}
+
+function latestProjectConversationUpdatedAt(conversations: ChatConversation[]) {
+  return conversations.reduce((latest, conversation) => Math.max(latest, conversation.updatedAt), 0);
 }
 
 function ConversationPinIcon({ filled }: { filled: boolean }) {
@@ -148,11 +184,15 @@ function ConversationRow({
   nested?: boolean;
 }) {
   const isPinned = Boolean(conversation.pinnedAt);
+  const isPending = conversation.messages.some(
+    (message) => message.role === "assistant" && message.status === "pending",
+  );
 
   return (
     <div
       className={`left-sidebar__conversation-row${nested ? " left-sidebar__conversation-row--nested" : ""}`}
       data-active={conversation.id === activeConversationId || undefined}
+      data-pending={isPending || undefined}
     >
       <button
         className="left-sidebar__conversation-main"
@@ -163,7 +203,11 @@ function ConversationRow({
       </button>
 
       <span className="left-sidebar__conversation-age">
-        {formatConversationAge(conversation.updatedAt, now, language, justNow)}
+        {isPending ? (
+          <span className="left-sidebar__conversation-spinner" aria-label="正在处理" />
+        ) : (
+          formatConversationAge(conversation.updatedAt, now, language, justNow)
+        )}
       </span>
 
       <div className="left-sidebar__conversation-item-actions" aria-label={archiveLabel}>
@@ -195,6 +239,8 @@ export function LeftSidebar({
   activeConversationId,
   conversations,
   isNewConversationActive,
+  onArchiveAllProjectConversations,
+  onArchiveAllRootConversations,
   onArchiveConversation,
   onArchiveProjectConversations,
   onNewConversation,
@@ -205,42 +251,70 @@ export function LeftSidebar({
   onShowProjectInFolder,
   onTogglePinConversation,
   onTogglePinProject,
+  onUiPreferencesChange,
   projects,
+  uiPreferences,
 }: LeftSidebarProps) {
   const { language, t } = useFrontendConfig();
   const [areProjectsOpen, setAreProjectsOpen] = useState(true);
   const [areConversationsOpen, setAreConversationsOpen] = useState(true);
   const [openProjectIds, setOpenProjectIds] = useState<Set<string>>(new Set());
   const [openProjectMenuId, setOpenProjectMenuId] = useState<string | null>(null);
+  const [openSectionMenu, setOpenSectionMenu] = useState<SidebarSectionScope | null>(null);
+  const [openSectionSubmenu, setOpenSectionSubmenu] = useState<SidebarSectionSubmenu | null>(null);
   const [renamingProject, setRenamingProject] = useState<AppProject | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const [pendingBulkArchiveScope, setPendingBulkArchiveScope] = useState<BulkArchiveScope | null>(null);
   const [pendingArchiveProject, setPendingArchiveProject] = useState<AppProject | null>(null);
   const [pendingRemoveProject, setPendingRemoveProject] = useState<AppProject | null>(null);
   const [now, setNow] = useState(Date.now());
+  const projectMenuRef = useRef<HTMLDivElement>(null);
+  const sectionMenuRef = useRef<HTMLDivElement>(null);
   const projectIds = new Set(projects.map((project) => project.id));
   const visibleConversations = conversations.filter((conversation) => !conversation.archivedAt);
+  const conversationsByProjectId = projects.reduce<Record<string, ChatConversation[]>>((accumulator, project) => {
+    accumulator[project.id] = sortConversations(
+      visibleConversations.filter((conversation) => conversation.projectId === project.id),
+      uiPreferences.sidebarConversationSort,
+    );
+    return accumulator;
+  }, {});
   const pinnedProjects = sortPinnedProjects(projects);
-  const regularProjects = sortRegularProjects(projects);
+  const regularProjects = sortRegularProjects(
+    projects,
+    conversationsByProjectId,
+    uiPreferences.sidebarProjectSort,
+  );
   const pinnedRootConversations = sortConversations(
     visibleConversations.filter(
       (conversation) =>
         conversation.pinnedAt && (!conversation.projectId || !projectIds.has(conversation.projectId)),
     ),
+    uiPreferences.sidebarConversationSort,
   );
   const rootConversations = sortConversations(
     visibleConversations.filter(
       (conversation) =>
         !conversation.pinnedAt && (!conversation.projectId || !projectIds.has(conversation.projectId)),
     ),
+    uiPreferences.sidebarConversationSort,
   );
-  const conversationsByProjectId = projects.reduce<Record<string, ChatConversation[]>>((accumulator, project) => {
-    accumulator[project.id] = sortConversations(
-      visibleConversations.filter((conversation) => conversation.projectId === project.id),
-    );
-    return accumulator;
-  }, {});
   const activeConversation = visibleConversations.find((conversation) => conversation.id === activeConversationId);
   const hasPinnedItems = pinnedProjects.length > 0 || pinnedRootConversations.length > 0;
+  const projectArchiveAllCount = visibleConversations.filter(
+    (conversation) => conversation.projectId && projectIds.has(conversation.projectId),
+  ).length;
+  const rootArchiveAllCount = visibleConversations.filter(
+    (conversation) => !conversation.projectId || !projectIds.has(conversation.projectId),
+  ).length;
+  const bulkArchiveCount =
+    pendingBulkArchiveScope === "projects" ? projectArchiveAllCount : rootArchiveAllCount;
+
+  useDismissOnOutsidePointer(projectMenuRef, Boolean(openProjectMenuId), () => setOpenProjectMenuId(null));
+  useDismissOnOutsidePointer(sectionMenuRef, Boolean(openSectionMenu), () => {
+    setOpenSectionMenu(null);
+    setOpenSectionSubmenu(null);
+  });
 
   useEffect(() => {
     const intervalId = window.setInterval(() => setNow(Date.now()), 60_000);
@@ -288,6 +362,45 @@ export function LeftSidebar({
     setRenameValue("");
   };
 
+  const closeSectionMenu = () => {
+    setOpenSectionMenu(null);
+    setOpenSectionSubmenu(null);
+  };
+
+  const openSectionActions = (scope: SidebarSectionScope) => {
+    setOpenSectionMenu((currentScope) => (currentScope === scope ? null : scope));
+    setOpenSectionSubmenu(null);
+    setOpenProjectMenuId(null);
+  };
+
+  const setConversationSort = (sort: SidebarConversationSort) => {
+    onUiPreferencesChange({ sidebarConversationSort: sort });
+    closeSectionMenu();
+  };
+
+  const setProjectSort = (sort: SidebarProjectSort) => {
+    onUiPreferencesChange({ sidebarProjectSort: sort });
+    closeSectionMenu();
+  };
+
+  const isSectionFirst = (scope: SidebarSectionScope) =>
+    scope === "projects"
+      ? uiPreferences.sidebarSectionOrder === "projects_first"
+      : uiPreferences.sidebarSectionOrder === "conversations_first";
+
+  const toggleSectionOrder = (scope: SidebarSectionScope) => {
+    const nextOrder =
+      scope === "projects"
+        ? isSectionFirst(scope)
+          ? "conversations_first"
+          : "projects_first"
+        : isSectionFirst(scope)
+          ? "projects_first"
+          : "conversations_first";
+    onUiPreferencesChange({ sidebarSectionOrder: nextOrder });
+    closeSectionMenu();
+  };
+
   const archiveProjectCount = pendingArchiveProject
     ? visibleConversations.filter((conversation) => conversation.projectId === pendingArchiveProject.id).length
     : 0;
@@ -310,9 +423,136 @@ export function LeftSidebar({
     />
   );
 
+  const renderSectionMenu = (scope: SidebarSectionScope) => {
+    const archiveCount = scope === "projects" ? projectArchiveAllCount : rootArchiveAllCount;
+    const archiveScope: BulkArchiveScope = scope === "projects" ? "projects" : "root";
+    const moveDown = isSectionFirst(scope);
+    const MoveIcon = moveDown ? ArrowDown : ArrowUp;
+
+    return (
+      <div className="left-sidebar__section-menu" role="menu" ref={sectionMenuRef}>
+        <button
+          className="left-sidebar__section-menu-item"
+          type="button"
+          role="menuitem"
+          disabled={archiveCount === 0}
+          onClick={() => {
+            setPendingBulkArchiveScope(archiveScope);
+            closeSectionMenu();
+          }}
+        >
+          <Archive aria-hidden="true" />
+          <span>{t("sidebar.archiveAllChats")}</span>
+        </button>
+
+        <div className="left-sidebar__section-menu-divider" />
+
+        <button
+          className="left-sidebar__section-menu-item"
+          type="button"
+          role="menuitem"
+          data-open={openSectionSubmenu === "organize" || undefined}
+          onMouseEnter={() => setOpenSectionSubmenu("organize")}
+          onClick={() =>
+            setOpenSectionSubmenu((currentSubmenu) =>
+              currentSubmenu === "organize" ? null : "organize",
+            )
+          }
+        >
+          <NotebookText aria-hidden="true" />
+          <span>{t("sidebar.organizeSidebar")}</span>
+          <ChevronDown className="left-sidebar__section-menu-item__chevron" aria-hidden="true" />
+        </button>
+
+        <button
+          className="left-sidebar__section-menu-item"
+          type="button"
+          role="menuitem"
+          data-open={openSectionSubmenu === "sort" || undefined}
+          onMouseEnter={() => setOpenSectionSubmenu("sort")}
+          onClick={() =>
+            setOpenSectionSubmenu((currentSubmenu) => (currentSubmenu === "sort" ? null : "sort"))
+          }
+        >
+          <Clock3 aria-hidden="true" />
+          <span>{t("sidebar.sortBy")}</span>
+          <ChevronDown className="left-sidebar__section-menu-item__chevron" aria-hidden="true" />
+        </button>
+
+        {openSectionSubmenu === "organize" && (
+          <div className="left-sidebar__section-submenu" role="menu">
+            <button
+              className="left-sidebar__section-menu-item"
+              type="button"
+              role="menuitem"
+              onClick={() => setProjectSort("created")}
+            >
+              <NotebookText aria-hidden="true" />
+              <span>{t("sidebar.organizeByProject")}</span>
+              {uiPreferences.sidebarProjectSort === "created" && (
+                <Check className="left-sidebar__section-menu-check" aria-hidden="true" />
+              )}
+            </button>
+            <button
+              className="left-sidebar__section-menu-item"
+              type="button"
+              role="menuitem"
+              onClick={() => setProjectSort("recent")}
+            >
+              <NotebookText aria-hidden="true" />
+              <span>{t("sidebar.organizeByRecentProject")}</span>
+              {uiPreferences.sidebarProjectSort === "recent" && (
+                <Check className="left-sidebar__section-menu-check" aria-hidden="true" />
+              )}
+            </button>
+            <button
+              className="left-sidebar__section-menu-item"
+              type="button"
+              role="menuitem"
+              onClick={() => toggleSectionOrder(scope)}
+            >
+              <MoveIcon aria-hidden="true" />
+              <span>{moveDown ? t("sidebar.moveDown") : t("sidebar.moveUp")}</span>
+            </button>
+          </div>
+        )}
+
+        {openSectionSubmenu === "sort" && (
+          <div className="left-sidebar__section-submenu" role="menu">
+            <button
+              className="left-sidebar__section-menu-item"
+              type="button"
+              role="menuitem"
+              onClick={() => setConversationSort("created")}
+            >
+              <Clock3 aria-hidden="true" />
+              <span>{t("sidebar.sortCreated")}</span>
+              {uiPreferences.sidebarConversationSort === "created" && (
+                <Check className="left-sidebar__section-menu-check" aria-hidden="true" />
+              )}
+            </button>
+            <button
+              className="left-sidebar__section-menu-item"
+              type="button"
+              role="menuitem"
+              onClick={() => setConversationSort("updated")}
+            >
+              <PencilLine aria-hidden="true" />
+              <span>{t("sidebar.sortUpdated")}</span>
+              {uiPreferences.sidebarConversationSort === "updated" && (
+                <Check className="left-sidebar__section-menu-check" aria-hidden="true" />
+              )}
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const renderProjectGroup = (project: AppProject, pinnedSection = false) => {
     const isProjectOpen = openProjectIds.has(project.id);
     const isProjectPinned = Boolean(project.pinnedAt);
+    const ProjectIcon = isProjectOpen ? FolderOpen : Folder;
     const projectConversations = conversationsByProjectId[project.id] ?? [];
     const visibleProjectConversationCount = projectConversations.length;
 
@@ -327,7 +567,7 @@ export function LeftSidebar({
             type="button"
             onClick={() => toggleProject(project.id)}
           >
-            <NotebookText aria-hidden="true" />
+            <ProjectIcon aria-hidden="true" />
             <span>{project.name}</span>
           </button>
 
@@ -345,7 +585,10 @@ export function LeftSidebar({
               type="button"
               aria-label={t("project.moreActions")}
               data-open={openProjectMenuId === project.id || undefined}
-              onClick={() => setOpenProjectMenuId((currentId) => (currentId === project.id ? null : project.id))}
+              onClick={() => {
+                closeSectionMenu();
+                setOpenProjectMenuId(openProjectMenuId === project.id ? null : project.id);
+              }}
             >
               <MoreHorizontal aria-hidden="true" />
             </button>
@@ -361,7 +604,7 @@ export function LeftSidebar({
         </div>
 
         {openProjectMenuId === project.id && (
-          <div className="left-sidebar__project-menu" role="menu">
+          <div className="left-sidebar__project-menu" role="menu" ref={projectMenuRef}>
             <button
               className="left-sidebar__project-menu-item"
               type="button"
@@ -433,6 +676,101 @@ export function LeftSidebar({
     );
   };
 
+  const projectsSection = (
+    <section
+      key="projects"
+      className="left-sidebar__section left-sidebar__projects"
+      aria-labelledby="projects-heading"
+    >
+      <div className="left-sidebar__section-header">
+        <button
+          className="left-sidebar__section-title-button"
+          type="button"
+          aria-expanded={areProjectsOpen}
+          onClick={() => setAreProjectsOpen((open) => !open)}
+        >
+          <h2 id="projects-heading" className="left-sidebar__section-title">
+            {t("sidebar.projects")}
+          </h2>
+          <ChevronDown data-open={areProjectsOpen || undefined} aria-hidden="true" />
+        </button>
+
+        <div className="left-sidebar__section-actions">
+          <button
+            className="left-sidebar__section-action"
+            type="button"
+            aria-label={t("project.moreActions")}
+            data-open={openSectionMenu === "projects" || undefined}
+            onClick={() => openSectionActions("projects")}
+          >
+            <MoreHorizontal aria-hidden="true" />
+          </button>
+        </div>
+      </div>
+
+      {openSectionMenu === "projects" && renderSectionMenu("projects")}
+
+      {areProjectsOpen && regularProjects.length > 0 && (
+        <div className="left-sidebar__project-list">
+          {regularProjects.map((project) => renderProjectGroup(project))}
+        </div>
+      )}
+    </section>
+  );
+
+  const conversationsSection = (
+    <section
+      key="conversations"
+      className="left-sidebar__section left-sidebar__conversations"
+      aria-labelledby="conversations-heading"
+    >
+      <div className="left-sidebar__conversation-header">
+        <button
+          className="left-sidebar__conversation-title-button"
+          type="button"
+          aria-expanded={areConversationsOpen}
+          onClick={() => setAreConversationsOpen((open) => !open)}
+        >
+          <h2 id="conversations-heading" className="left-sidebar__section-title">
+            {t("sidebar.conversations")}
+          </h2>
+          <ChevronDown data-open={areConversationsOpen || undefined} aria-hidden="true" />
+        </button>
+
+        <div className="left-sidebar__conversation-actions">
+          <button
+            className="left-sidebar__conversation-action"
+            type="button"
+            aria-label={t("sidebar.moreConversationActions")}
+            data-open={openSectionMenu === "conversations" || undefined}
+            onClick={() => openSectionActions("conversations")}
+          >
+            <MoreHorizontal aria-hidden="true" />
+          </button>
+          <button
+            className="left-sidebar__conversation-action"
+            type="button"
+            aria-label={t("sidebar.newConversationAction")}
+            onClick={() => onNewConversation(null)}
+          >
+            <SquarePen aria-hidden="true" />
+          </button>
+        </div>
+      </div>
+
+      {openSectionMenu === "conversations" && renderSectionMenu("conversations")}
+
+      {areConversationsOpen &&
+        (rootConversations.length === 0 ? (
+          <p className="left-sidebar__empty-state">{t("sidebar.emptyConversations")}</p>
+        ) : (
+          <div className="left-sidebar__conversation-list">
+            {rootConversations.map((conversation) => renderConversationRow(conversation))}
+          </div>
+        ))}
+    </section>
+  );
+
   return (
     <aside className="left-sidebar" aria-label={t("app.leftSidebar")}>
       <button
@@ -457,76 +795,17 @@ export function LeftSidebar({
         </section>
       )}
 
-      <section className="left-sidebar__section left-sidebar__projects" aria-labelledby="projects-heading">
-        <div className="left-sidebar__section-header">
-          <button
-            className="left-sidebar__section-title-button"
-            type="button"
-            aria-expanded={areProjectsOpen}
-            onClick={() => setAreProjectsOpen((open) => !open)}
-          >
-            <h2 id="projects-heading" className="left-sidebar__section-title">
-              {t("sidebar.projects")}
-            </h2>
-            <ChevronDown data-open={areProjectsOpen || undefined} aria-hidden="true" />
-          </button>
-
-          <div className="left-sidebar__section-actions">
-            <button className="left-sidebar__section-action" type="button" aria-label={t("project.moreActions")}>
-              <MoreHorizontal aria-hidden="true" />
-            </button>
-          </div>
-        </div>
-
-        {areProjectsOpen && regularProjects.length > 0 && (
-          <div className="left-sidebar__project-list">
-            {regularProjects.map((project) => renderProjectGroup(project))}
-          </div>
-        )}
-      </section>
-
-      <section className="left-sidebar__section left-sidebar__conversations" aria-labelledby="conversations-heading">
-        <div className="left-sidebar__conversation-header">
-          <button
-            className="left-sidebar__conversation-title-button"
-            type="button"
-            aria-expanded={areConversationsOpen}
-            onClick={() => setAreConversationsOpen((open) => !open)}
-          >
-            <h2 id="conversations-heading" className="left-sidebar__section-title">
-              {t("sidebar.conversations")}
-            </h2>
-            <ChevronDown data-open={areConversationsOpen || undefined} aria-hidden="true" />
-          </button>
-
-          <div className="left-sidebar__conversation-actions">
-            <button
-              className="left-sidebar__conversation-action"
-              type="button"
-              aria-label={t("sidebar.moreConversationActions")}
-            >
-              <MoreHorizontal aria-hidden="true" />
-            </button>
-            <button
-              className="left-sidebar__conversation-action"
-              type="button"
-              aria-label={t("sidebar.newConversationAction")}
-              onClick={() => onNewConversation(null)}
-            >
-              <SquarePen aria-hidden="true" />
-            </button>
-          </div>
-        </div>
-
-        {areConversationsOpen &&
-          (rootConversations.length === 0 ? (
-            <p className="left-sidebar__empty-state">{t("sidebar.emptyConversations")}</p>
-          ) : (
-            <div className="left-sidebar__conversation-list">
-              {rootConversations.map((conversation) => renderConversationRow(conversation))}
-            </div>
-          ))}
-      </section>
+      {uiPreferences.sidebarSectionOrder === "conversations_first" ? (
+        <>
+          {conversationsSection}
+          {projectsSection}
+        </>
+      ) : (
+        <>
+          {projectsSection}
+          {conversationsSection}
+        </>
+      )}
 
       <button className="left-sidebar__settings" type="button" onClick={onOpenSettings}>
         <Settings aria-hidden="true" />
@@ -574,6 +853,56 @@ export function LeftSidebar({
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {pendingBulkArchiveScope && (
+        <div
+          className="left-sidebar__dialog-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.currentTarget === event.target) setPendingBulkArchiveScope(null);
+          }}
+        >
+          <div className="left-sidebar__dialog left-sidebar__dialog--confirm" role="dialog" aria-modal="true">
+            <button
+              className="left-sidebar__dialog-close"
+              type="button"
+              aria-label={t("project.cancel")}
+              onClick={() => setPendingBulkArchiveScope(null)}
+            >
+              <X aria-hidden="true" />
+            </button>
+            <h3>{formatTemplate(t("sidebar.archiveAllTitle"), { count: bulkArchiveCount })}</h3>
+            <p>
+              {pendingBulkArchiveScope === "projects"
+                ? t("sidebar.archiveAllProjectsDescription")
+                : t("sidebar.archiveAllRootDescription")}
+            </p>
+            <div className="left-sidebar__dialog-actions">
+              <button
+                className="left-sidebar__dialog-button left-sidebar__dialog-button--secondary"
+                type="button"
+                onClick={() => setPendingBulkArchiveScope(null)}
+              >
+                {t("project.cancel")}
+              </button>
+              <button
+                className="left-sidebar__dialog-button left-sidebar__dialog-button--danger"
+                type="button"
+                onClick={() => {
+                  if (pendingBulkArchiveScope === "projects") {
+                    onArchiveAllProjectConversations();
+                  } else {
+                    onArchiveAllRootConversations();
+                  }
+                  setPendingBulkArchiveScope(null);
+                }}
+              >
+                {t("project.archiveAll")}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

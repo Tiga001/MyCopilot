@@ -5,6 +5,7 @@ import { ResizeHandle } from "../components/layout/ResizeHandle";
 import { LeftSidebar } from "../components/sidebar/LeftSidebar";
 import { RightSidebar } from "../components/sidebar/RightSidebar";
 import { useFrontendConfig } from "../config/FrontendConfigProvider";
+import { modelConfig } from "../config/modelConfig";
 import { useProjectSettings } from "../config/ProjectSettingsProvider";
 import {
   approveAgentAction,
@@ -18,15 +19,23 @@ import type {
   ChatAgentCommandOutput,
   ChatAgentRunView,
   ChatAgentTimelineItem,
+  ChatComposerDraft,
   ChatConversation,
   ChatMessage,
   ChatSubmitOptions,
 } from "../features/chat/chatTypes";
 import {
+  deleteStoredComposerDraft,
   deleteStoredConversation,
+  defaultUiPreferences,
+  loadComposerDrafts,
   loadConversations,
+  loadUiPreferences,
+  saveComposerDraft,
   saveConversation,
+  saveUiPreferences,
 } from "../features/storage/storageClient";
+import type { UiPreferencesSnapshot } from "../features/storage/storageClient";
 import { SettingsPage } from "../features/settings/SettingsPage";
 import type {
   AgentActionExecutionOutput,
@@ -45,14 +54,14 @@ const LEFT_MIN_WIDTH = 220;
 const RIGHT_MIN_WIDTH = 280;
 const SIDE_MAX_WIDTH = 560;
 const CENTER_MIN_WIDTH = 480;
+const NEW_CONVERSATION_DRAFT_ID = "new-conversation";
 
 type Side = "left" | "right";
 type AppView = "workspace" | "settings";
-type WorkspaceView = "blank" | "newConversation" | "conversation";
+type WorkspaceView = "newConversation" | "conversation";
 type ActiveRunBinding = {
   conversationId: string;
   pendingMessageId: string;
-  unlisten: () => void;
 };
 
 const THINKING_PLACEHOLDER = "正在思考...";
@@ -87,6 +96,27 @@ function createAssistantMessage(content: string, status: ChatMessage["status"] =
     content,
     createdAt: Date.now(),
     status,
+  };
+}
+
+function createComposerDraft(
+  overrides: Partial<ChatComposerDraft> = {},
+): ChatComposerDraft {
+  const draft = {
+    message: "",
+    permissionMode: "full",
+    modelId: modelConfig.defaults.selectedModelId,
+    projectId: null,
+    attachments: [],
+    updatedAt: Date.now(),
+    ...overrides,
+  };
+
+  return {
+    ...draft,
+    modelId: draft.modelId || modelConfig.defaults.selectedModelId,
+    permissionMode: draft.permissionMode === "default" ? "default" : "full",
+    attachments: draft.attachments ?? [],
   };
 }
 
@@ -546,6 +576,7 @@ export function App() {
   const cancelledPendingMessageIdsRef = useRef<Set<string>>(new Set());
   const cancelledRunIdsRef = useRef<Set<string>>(new Set());
   const activeRunBindingsRef = useRef<Map<string, ActiveRunBinding>>(new Map());
+  const bufferedAgentEventsRef = useRef<Map<string, AgentEvent[]>>(new Map());
   const { t } = useFrontendConfig();
   const {
     deleteProject,
@@ -556,9 +587,13 @@ export function App() {
     togglePinProject,
   } = useProjectSettings();
   const [view, setView] = useState<AppView>("workspace");
-  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>("blank");
+  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>("newConversation");
   const [conversations, setConversations] = useState<ChatConversation[]>([]);
   const [hasLoadedConversations, setHasLoadedConversations] = useState(false);
+  const [composerDrafts, setComposerDrafts] = useState<Record<string, ChatComposerDraft>>({});
+  const [hasLoadedComposerDrafts, setHasLoadedComposerDrafts] = useState(false);
+  const [uiPreferences, setUiPreferences] = useState<UiPreferencesSnapshot>(() => defaultUiPreferences());
+  const [hasLoadedUiPreferences, setHasLoadedUiPreferences] = useState(false);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [newConversationProjectId, setNewConversationProjectId] = useState<string | null>(null);
   const [leftWidth, setLeftWidth] = useState(LEFT_DEFAULT_WIDTH);
@@ -619,6 +654,52 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    let isCancelled = false;
+
+    void loadUiPreferences()
+      .then((storedPreferences) => {
+        if (!isCancelled) {
+          setUiPreferences(storedPreferences);
+        }
+      })
+      .catch((error) => {
+        console.error("Failed to load UI preferences from SQLite", error);
+      })
+      .finally(() => {
+        if (!isCancelled) {
+          setHasLoadedUiPreferences(true);
+        }
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    void loadComposerDrafts()
+      .then((storedDrafts) => {
+        if (!isCancelled) {
+          setComposerDrafts(storedDrafts);
+        }
+      })
+      .catch((error) => {
+        console.error("Failed to load composer drafts from SQLite", error);
+      })
+      .finally(() => {
+        if (!isCancelled) {
+          setHasLoadedComposerDrafts(true);
+        }
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     if (!hasLoadedConversations) return;
 
     conversations.forEach((conversation) => {
@@ -627,6 +708,24 @@ export function App() {
       });
     });
   }, [conversations, hasLoadedConversations]);
+
+  useEffect(() => {
+    if (!hasLoadedComposerDrafts) return;
+
+    Object.entries(composerDrafts).forEach(([scopeId, draft]) => {
+      void saveComposerDraft(scopeId, draft).catch((error) => {
+        console.error("Failed to save composer draft to SQLite", error);
+      });
+    });
+  }, [composerDrafts, hasLoadedComposerDrafts]);
+
+  useEffect(() => {
+    if (!hasLoadedUiPreferences) return;
+
+    void saveUiPreferences(uiPreferences).catch((error) => {
+      console.error("Failed to save UI preferences to SQLite", error);
+    });
+  }, [hasLoadedUiPreferences, uiPreferences]);
 
   useEffect(() => {
     if (!hasLoadedConversations || !hasLoadedProjects) return;
@@ -638,15 +737,38 @@ export function App() {
 
     if (removedConversationIds.length === 0) return;
 
+    removedConversationIds.forEach((conversationId) => {
+      void deleteStoredComposerDraft(conversationId).catch((error) => {
+        console.error("Failed to delete removed project conversation draft from SQLite", error);
+      });
+    });
+
     setConversations((currentConversations) =>
       currentConversations.filter(
         (conversation) => !conversation.projectId || projectIds.has(conversation.projectId),
       ),
     );
+    setComposerDrafts((currentDrafts) => {
+      const nextDrafts = { ...currentDrafts };
+      removedConversationIds.forEach((conversationId) => {
+        delete nextDrafts[conversationId];
+      });
+
+      const newConversationProjectId = nextDrafts[NEW_CONVERSATION_DRAFT_ID]?.projectId;
+      if (newConversationProjectId && !projectIds.has(newConversationProjectId)) {
+        nextDrafts[NEW_CONVERSATION_DRAFT_ID] = {
+          ...nextDrafts[NEW_CONVERSATION_DRAFT_ID],
+          projectId: null,
+          updatedAt: Date.now(),
+        };
+      }
+
+      return nextDrafts;
+    });
 
     if (activeConversationId && removedConversationIds.includes(activeConversationId)) {
       setActiveConversationId(null);
-      setWorkspaceView("blank");
+      setWorkspaceView("newConversation");
     }
 
     if (newConversationProjectId && !projectIds.has(newConversationProjectId)) {
@@ -663,24 +785,51 @@ export function App() {
 
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId);
   const toolbarTitle = workspaceView === "conversation" ? activeConversation?.title : undefined;
+  const getComposerDraft = useCallback(
+    (
+      scopeId: string,
+      defaults: Partial<Pick<ChatComposerDraft, "modelId" | "projectId" | "permissionMode">> = {},
+    ) => composerDrafts[scopeId] ?? createComposerDraft(defaults),
+    [composerDrafts],
+  );
+  const updateComposerDraft = useCallback((scopeId: string, draft: ChatComposerDraft) => {
+    setComposerDrafts((currentDrafts) => ({
+      ...currentDrafts,
+      [scopeId]: draft,
+    }));
+  }, []);
+  const updateUiPreferences = useCallback((patch: Partial<UiPreferencesSnapshot>) => {
+    setUiPreferences((currentPreferences) => ({
+      ...currentPreferences,
+      ...patch,
+      updatedAt: Date.now(),
+    }));
+  }, []);
+  const newConversationDraft = getComposerDraft(NEW_CONVERSATION_DRAFT_ID, {
+    projectId: newConversationProjectId,
+  });
+  const activeConversationDraft = activeConversation
+    ? getComposerDraft(activeConversation.id, {
+        modelId: activeConversation.modelId ?? undefined,
+        projectId: activeConversation.projectId,
+      })
+    : null;
 
   const cleanupRunBinding = useCallback((runId: string) => {
-    const binding = activeRunBindingsRef.current.get(runId);
-    if (!binding) return;
-
-    binding.unlisten();
     activeRunBindingsRef.current.delete(runId);
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      activeRunBindingsRef.current.forEach((binding) => binding.unlisten());
-      activeRunBindingsRef.current.clear();
-    };
+    bufferedAgentEventsRef.current.delete(runId);
   }, []);
 
   const startNewConversation = useCallback((projectId: string | null = null) => {
     setNewConversationProjectId(projectId);
+    setComposerDrafts((currentDrafts) => ({
+      ...currentDrafts,
+      [NEW_CONVERSATION_DRAFT_ID]: {
+        ...(currentDrafts[NEW_CONVERSATION_DRAFT_ID] ?? createComposerDraft()),
+        projectId,
+        updatedAt: Date.now(),
+      },
+    }));
     setActiveConversationId(null);
     setWorkspaceView("newConversation");
   }, []);
@@ -754,6 +903,41 @@ export function App() {
     [cleanupRunBinding, updateAssistantMessage],
   );
 
+  useEffect(() => {
+    let isDisposed = false;
+    let unlistenAgentEvents: (() => void) | null = null;
+
+    void listen<AgentEvent>("agent_event", (event) => {
+      const agentEvent = event.payload;
+
+      if (isDisposed) return;
+      if (!agentEvent.runId) return;
+
+      const binding = activeRunBindingsRef.current.get(agentEvent.runId);
+      if (!binding) {
+        const bufferedEvents = bufferedAgentEventsRef.current.get(agentEvent.runId) ?? [];
+        bufferedAgentEventsRef.current.set(agentEvent.runId, [...bufferedEvents, agentEvent]);
+        return;
+      }
+
+      handleAgentEvent(binding.conversationId, binding.pendingMessageId, agentEvent);
+    }).then((unlisten) => {
+      if (isDisposed) {
+        unlisten();
+        return;
+      }
+
+      unlistenAgentEvents = unlisten;
+    });
+
+    return () => {
+      isDisposed = true;
+      unlistenAgentEvents?.();
+      activeRunBindingsRef.current.clear();
+      bufferedAgentEventsRef.current.clear();
+    };
+  }, [handleAgentEvent]);
+
   const requestAssistantResponse = useCallback(
     async (
       conversationId: string,
@@ -817,6 +1001,7 @@ export function App() {
 
                       return {
                         ...mergedMessage,
+                        content: mergedMessage.content || message.content || THINKING_PLACEHOLDER,
                         status: "pending",
                         agentRun: ensureAgentRun(mergedMessage.agentRun, startOutput.runId, "running"),
                       };
@@ -831,24 +1016,28 @@ export function App() {
         );
 
         if (resolvedConversationId !== conversationId) {
+          setComposerDrafts((currentDrafts) => {
+            const draft = currentDrafts[conversationId];
+            if (!draft) return currentDrafts;
+            const nextDrafts = { ...currentDrafts, [resolvedConversationId]: draft };
+            delete nextDrafts[conversationId];
+            return nextDrafts;
+          });
+
           setActiveConversationId((currentActiveConversationId) =>
             currentActiveConversationId === conversationId ? resolvedConversationId : currentActiveConversationId,
           );
         }
 
-        const unlisten = await listen<AgentEvent>(startOutput.eventName, (event) => {
-          const agentEvent = event.payload;
-
-          if (agentEvent.runId && agentEvent.runId !== startOutput.runId) return;
-          if (!agentEvent.runId && agentEvent.type !== "error") return;
-
-          handleAgentEvent(resolvedConversationId, resolvedAssistantMessageId, agentEvent);
-        });
-
         activeRunBindingsRef.current.set(startOutput.runId, {
           conversationId: resolvedConversationId,
           pendingMessageId: resolvedAssistantMessageId,
-          unlisten,
+        });
+
+        const bufferedEvents = bufferedAgentEventsRef.current.get(startOutput.runId) ?? [];
+        bufferedAgentEventsRef.current.delete(startOutput.runId);
+        bufferedEvents.forEach((agentEvent) => {
+          handleAgentEvent(resolvedConversationId, resolvedAssistantMessageId, agentEvent);
         });
       } catch (error) {
         if (cancelledPendingMessageIdsRef.current.has(pendingMessageId)) {
@@ -889,6 +1078,24 @@ export function App() {
       };
 
       setConversations((currentConversations) => [conversation, ...currentConversations]);
+      setComposerDrafts((currentDrafts) => ({
+        ...currentDrafts,
+        [NEW_CONVERSATION_DRAFT_ID]: {
+          ...(currentDrafts[NEW_CONVERSATION_DRAFT_ID] ?? createComposerDraft()),
+          message: "",
+          attachments: [],
+          modelId: options.modelId,
+          permissionMode: options.permissionMode,
+          projectId: options.projectId,
+          updatedAt: now,
+        },
+        [conversation.id]: createComposerDraft({
+          modelId: options.modelId,
+          permissionMode: options.permissionMode,
+          projectId: options.projectId,
+          updatedAt: now,
+        }),
+      }));
       setActiveConversationId(conversation.id);
       setNewConversationProjectId(null);
       setWorkspaceView("conversation");
@@ -986,7 +1193,7 @@ export function App() {
 
       if (activeConversationId === conversationId) {
         setActiveConversationId(null);
-        setWorkspaceView("blank");
+        setWorkspaceView("newConversation");
       }
     },
     [activeConversationId],
@@ -1014,11 +1221,61 @@ export function App() {
 
       if (activeConversationId && archivedConversationIds.includes(activeConversationId)) {
         setActiveConversationId(null);
-        setWorkspaceView("blank");
+        setWorkspaceView("newConversation");
       }
     },
     [activeConversationId, conversations],
   );
+
+  const archiveAllProjectConversations = useCallback(() => {
+    const now = Date.now();
+    const projectIds = new Set(projects.map((project) => project.id));
+
+    setConversations((currentConversations) =>
+      currentConversations.map((conversation) =>
+        conversation.projectId && projectIds.has(conversation.projectId) && !conversation.archivedAt
+          ? {
+              ...conversation,
+              archivedAt: now,
+            }
+          : conversation,
+      ),
+    );
+
+    const activeConversationSnapshot = conversations.find((conversation) => conversation.id === activeConversationId);
+    if (
+      activeConversationSnapshot?.projectId &&
+      projectIds.has(activeConversationSnapshot.projectId)
+    ) {
+      setActiveConversationId(null);
+      setWorkspaceView("newConversation");
+    }
+  }, [activeConversationId, conversations, projects]);
+
+  const archiveAllRootConversations = useCallback(() => {
+    const now = Date.now();
+    const projectIds = new Set(projects.map((project) => project.id));
+
+    setConversations((currentConversations) =>
+      currentConversations.map((conversation) =>
+        (!conversation.projectId || !projectIds.has(conversation.projectId)) && !conversation.archivedAt
+          ? {
+              ...conversation,
+              archivedAt: now,
+            }
+          : conversation,
+      ),
+    );
+
+    const activeConversationSnapshot = conversations.find((conversation) => conversation.id === activeConversationId);
+    if (
+      activeConversationSnapshot &&
+      (!activeConversationSnapshot.projectId || !projectIds.has(activeConversationSnapshot.projectId))
+    ) {
+      setActiveConversationId(null);
+      setWorkspaceView("newConversation");
+    }
+  }, [activeConversationId, conversations, projects]);
 
   const unarchiveConversation = useCallback((conversationId: string) => {
     setConversations((currentConversations) =>
@@ -1042,10 +1299,18 @@ export function App() {
       void deleteStoredConversation(conversationId).catch((error) => {
         console.error("Failed to delete conversation from SQLite", error);
       });
+      void deleteStoredComposerDraft(conversationId).catch((error) => {
+        console.error("Failed to delete composer draft from SQLite", error);
+      });
+      setComposerDrafts((currentDrafts) => {
+        const nextDrafts = { ...currentDrafts };
+        delete nextDrafts[conversationId];
+        return nextDrafts;
+      });
 
       if (activeConversationId === conversationId) {
         setActiveConversationId(null);
-        setWorkspaceView("blank");
+        setWorkspaceView("newConversation");
       }
     },
     [activeConversationId],
@@ -1066,11 +1331,21 @@ export function App() {
       void deleteStoredConversation(conversationId).catch((error) => {
         console.error("Failed to delete archived conversation from SQLite", error);
       });
+      void deleteStoredComposerDraft(conversationId).catch((error) => {
+        console.error("Failed to delete archived composer draft from SQLite", error);
+      });
+    });
+    setComposerDrafts((currentDrafts) => {
+      const nextDrafts = { ...currentDrafts };
+      archivedConversationIds.forEach((conversationId) => {
+        delete nextDrafts[conversationId];
+      });
+      return nextDrafts;
     });
 
     if (activeConversationId && archivedConversationIds.includes(activeConversationId)) {
       setActiveConversationId(null);
-      setWorkspaceView("blank");
+      setWorkspaceView("newConversation");
     }
   }, [activeConversationId, conversations]);
 
@@ -1265,6 +1540,9 @@ export function App() {
           activeConversationId={activeConversationId}
           conversations={conversations}
           projects={projects}
+          uiPreferences={uiPreferences}
+          onArchiveAllProjectConversations={archiveAllProjectConversations}
+          onArchiveAllRootConversations={archiveAllRootConversations}
           onArchiveConversation={archiveConversation}
           onArchiveProjectConversations={archiveProjectConversations}
           onNewConversation={startNewConversation}
@@ -1275,6 +1553,7 @@ export function App() {
           onSelectConversation={selectConversation}
           onTogglePinConversation={togglePinConversation}
           onTogglePinProject={togglePinProject}
+          onUiPreferencesChange={updateUiPreferences}
         />
       </div>
 
@@ -1311,13 +1590,20 @@ export function App() {
         </div>
         <div className="main-panel__surface">
           {workspaceView === "newConversation" && (
-            <NewConversationPage defaultProjectId={newConversationProjectId} onSubmitMessage={createConversationFromMessage} />
+            <NewConversationPage
+              defaultProjectId={newConversationProjectId}
+              draft={newConversationDraft}
+              onDraftChange={(draft) => updateComposerDraft(NEW_CONVERSATION_DRAFT_ID, draft)}
+              onSubmitMessage={createConversationFromMessage}
+            />
           )}
-          {workspaceView === "conversation" && activeConversation && (
+          {workspaceView === "conversation" && activeConversation && activeConversationDraft && (
             <ChatConversationPage
+              composerDraft={activeConversationDraft}
               conversation={activeConversation}
               onApproveAgentAction={handleApproveAgentAction}
               onCancelAgentAction={handleCancelAgentAction}
+              onComposerDraftChange={(draft) => updateComposerDraft(activeConversation.id, draft)}
               onRejectAgentAction={handleRejectAgentAction}
               onStopGenerating={stopActiveGeneration}
               onSubmitMessage={appendMessageToActiveConversation}

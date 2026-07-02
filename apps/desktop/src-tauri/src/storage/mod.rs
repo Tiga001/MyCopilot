@@ -1,9 +1,11 @@
 pub mod attachment_repository;
 pub mod chat_repository;
 pub mod commands;
+pub mod composer_draft_repository;
 pub mod config_repository;
 pub mod migrations;
 pub mod models;
+pub mod preferences_repository;
 pub mod project_repository;
 
 use rusqlite::Connection;

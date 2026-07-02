@@ -38,6 +38,11 @@ pub fn run() {
             storage::commands::load_conversations,
             storage::commands::save_conversation,
             storage::commands::delete_conversation,
+            storage::commands::load_composer_drafts,
+            storage::commands::save_composer_draft,
+            storage::commands::delete_composer_draft,
+            storage::commands::load_ui_preferences,
+            storage::commands::save_ui_preferences,
         ])
         .run(tauri::generate_context!())
         .expect("error while running MyCopilot");

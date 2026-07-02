@@ -1,6 +1,6 @@
 use crate::llm::{
-    complete_chat, detect_api_style, LlmChatRequest, LlmImage, LlmMessage, LlmMessageRole,
-    LlmToolCall,
+    complete_chat, complete_chat_streaming, detect_api_style, LlmChatRequest, LlmImage, LlmMessage,
+    LlmMessageRole, LlmToolCall,
 };
 use crate::protocol::{
     AgentApprovalDecision, AgentApprovalDecisionStatus, AgentApprovalStatus, AgentChatInput,
@@ -72,8 +72,9 @@ impl AgentRuntime {
     ) -> AgentResult<AgentChatOutput> {
         let run_id = run_id.unwrap_or_else(generate_run_id);
         let context = input.context.clone();
-        let tool_registry =
-            ToolRegistry::read_only_defaults_with_search(input.search_config.as_ref());
+        let tool_registry = Arc::new(ToolRegistry::read_only_defaults_with_search(
+            input.search_config.as_ref(),
+        ));
         let tool_definitions = tool_registry.definitions();
         let mut event_stream = AgentEventStream::new(emitter);
         event_stream.emit(AgentEvent::Started {
@@ -94,17 +95,31 @@ impl AgentRuntime {
         let mut final_content = None;
 
         for iteration in 0..=self.max_tool_iterations {
-            let llm_response = complete_chat(LlmChatRequest {
+            let request = LlmChatRequest {
                 api_url: llm_request.api_url.clone(),
                 api_token: llm_request.api_token.clone(),
                 model: llm_request.model.clone(),
                 api_style: llm_request.api_style,
                 max_tokens: llm_request.max_tokens,
                 temperature: llm_request.temperature,
+                stream: llm_request.stream,
                 messages: messages.clone(),
                 tools: llm_request.tools.clone(),
-            })
-            .await?;
+            };
+            let llm_response = if request.stream {
+                let delta_run_id = run_id.clone();
+                complete_chat_streaming(request, |delta| {
+                    if !delta.is_empty() {
+                        event_stream.emit(AgentEvent::MessageDelta {
+                            run_id: delta_run_id.clone(),
+                            delta,
+                        });
+                    }
+                })
+                .await?
+            } else {
+                complete_chat(request).await?
+            };
 
             merge_usage(&mut usage, llm_response.usage);
             finish_reason = llm_response.finish_reason;
@@ -205,7 +220,12 @@ impl AgentRuntime {
                     });
                 }
 
-                let result = tool_registry.execute(&tool_context, &call);
+                let result = execute_tool_on_blocking_thread(
+                    tool_registry.clone(),
+                    tool_context.clone(),
+                    call.clone(),
+                )
+                .await?;
                 let event_result = redact_tool_result_for_event(&result);
                 event_stream.emit(AgentEvent::ToolResult {
                     run_id: run_id.clone(),
@@ -224,10 +244,12 @@ impl AgentRuntime {
         }
 
         let content = final_content.unwrap_or_else(|| "没有生成可显示的回复。".to_string());
-        event_stream.emit(AgentEvent::MessageDelta {
-            run_id: run_id.clone(),
-            delta: content.clone(),
-        });
+        if !llm_request.stream {
+            event_stream.emit(AgentEvent::MessageDelta {
+                run_id: run_id.clone(),
+                delta: content.clone(),
+            });
+        }
         event_stream.emit(state_event(&run_id, AgentRunStatus::Completed, None, None));
         event_stream.emit(done_event(
             &run_id,
@@ -302,6 +324,7 @@ fn build_llm_request(
         api_style,
         max_tokens: sanitize_max_tokens(input.max_tokens),
         temperature: sanitize_temperature(input.temperature),
+        stream: input.stream.unwrap_or(false),
         messages,
         tools: tool_definitions.to_vec(),
     })
@@ -945,6 +968,16 @@ fn build_tool_observation_message(result: &AgentToolResult) -> String {
     format!(
         "Tool result observation. Use this result to continue. Do not repeat the same tool call unless more information is needed.\n```json\n{payload}\n```"
     )
+}
+
+async fn execute_tool_on_blocking_thread(
+    registry: Arc<ToolRegistry>,
+    context: ToolExecutionContext,
+    call: AgentToolCall,
+) -> AgentResult<AgentToolResult> {
+    tokio::task::spawn_blocking(move || registry.execute(&context, &call))
+        .await
+        .map_err(|error| AgentError::new(format!("工具执行线程失败：{error}")))
 }
 
 fn redact_tool_result_for_event(result: &AgentToolResult) -> AgentToolResult {

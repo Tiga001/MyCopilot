@@ -159,6 +159,7 @@ fn tavily_api_key(search_config: Option<&AgentSearchConfig>) -> Option<String> {
     Some(api_key.to_string())
 }
 
+#[derive(Clone)]
 pub struct ToolExecutionContext {
     workspace_root: Option<PathBuf>,
     attachment_library: Option<AgentAttachmentLibraryContext>,

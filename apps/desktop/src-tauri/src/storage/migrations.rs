@@ -80,6 +80,24 @@ pub fn run_migrations(connection: &Connection) -> rusqlite::Result<()> {
             created_at INTEGER NOT NULL,
             FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
+
+        CREATE TABLE IF NOT EXISTS composer_drafts (
+            scope_id TEXT PRIMARY KEY,
+            message TEXT NOT NULL,
+            permission_mode TEXT NOT NULL,
+            model_id TEXT,
+            project_id TEXT,
+            attachments_json TEXT NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS ui_preferences (
+            id TEXT PRIMARY KEY CHECK (id = 'default'),
+            sidebar_conversation_sort TEXT NOT NULL,
+            sidebar_project_sort TEXT NOT NULL,
+            sidebar_section_order TEXT NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
         ",
     )?;
 
@@ -110,6 +128,7 @@ pub fn run_migrations(connection: &Connection) -> rusqlite::Result<()> {
         CREATE INDEX IF NOT EXISTS idx_attachments_conversation_id ON attachments(conversation_id, created_at);
         CREATE INDEX IF NOT EXISTS idx_attachments_project_id ON attachments(project_id, created_at);
         CREATE INDEX IF NOT EXISTS idx_attachments_message_id ON attachments(message_id);
+        CREATE INDEX IF NOT EXISTS idx_composer_drafts_updated_at ON composer_drafts(updated_at);
         ",
     )
 }

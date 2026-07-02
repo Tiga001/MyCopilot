@@ -72,10 +72,33 @@ pub struct ChatConversationRecord {
     pub archived_at: Option<i64>,
 }
 
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ComposerDraftRecord {
+    pub scope_id: String,
+    pub message: String,
+    pub permission_mode: String,
+    pub model_id: Option<String>,
+    pub project_id: Option<String>,
+    pub attachments_json: String,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct UiPreferencesRecord {
+    pub sidebar_conversation_sort: String,
+    pub sidebar_project_sort: String,
+    pub sidebar_section_order: String,
+    pub updated_at: i64,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppDataSnapshot {
     pub model_settings: Option<ModelSettingsRecord>,
     pub projects: Vec<ProjectRecord>,
     pub conversations: Vec<ChatConversationRecord>,
+    pub composer_drafts: Vec<ComposerDraftRecord>,
+    pub ui_preferences: UiPreferencesRecord,
 }

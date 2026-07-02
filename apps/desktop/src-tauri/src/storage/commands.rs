@@ -1,8 +1,10 @@
 use crate::storage::models::{
-    AppDataSnapshot, ChatConversationRecord, ModelSettingsRecord, ProjectRecord,
+    AppDataSnapshot, ChatConversationRecord, ComposerDraftRecord, ModelSettingsRecord,
+    ProjectRecord, UiPreferencesRecord,
 };
 use crate::storage::{
-    chat_repository, config_repository, now_ms, project_repository, storage_error, StorageState,
+    chat_repository, composer_draft_repository, config_repository, now_ms,
+    preferences_repository, project_repository, storage_error, StorageState,
 };
 use std::process::Command;
 use tauri::State;
@@ -16,6 +18,10 @@ pub fn load_app_data(state: State<'_, StorageState>) -> Result<AppDataSnapshot, 
             .map_err(storage_error)?,
         projects: project_repository::list_projects(&connection).map_err(storage_error)?,
         conversations: chat_repository::list_conversations(&connection).map_err(storage_error)?,
+        composer_drafts: composer_draft_repository::list_composer_drafts(&connection)
+            .map_err(storage_error)?,
+        ui_preferences: preferences_repository::load_ui_preferences(&connection)
+            .map_err(storage_error)?,
     })
 }
 
@@ -168,6 +174,49 @@ pub fn delete_conversation(
 ) -> Result<(), String> {
     let connection = state.connection()?;
     chat_repository::delete_conversation(&connection, &conversation_id).map_err(storage_error)
+}
+
+#[tauri::command]
+pub fn load_composer_drafts(
+    state: State<'_, StorageState>,
+) -> Result<Vec<ComposerDraftRecord>, String> {
+    let connection = state.connection()?;
+    composer_draft_repository::list_composer_drafts(&connection).map_err(storage_error)
+}
+
+#[tauri::command]
+pub fn save_composer_draft(
+    state: State<'_, StorageState>,
+    draft: ComposerDraftRecord,
+) -> Result<ComposerDraftRecord, String> {
+    let connection = state.connection()?;
+    composer_draft_repository::save_composer_draft(&connection, draft.clone())
+        .map_err(storage_error)?;
+    Ok(draft)
+}
+
+#[tauri::command]
+pub fn delete_composer_draft(
+    state: State<'_, StorageState>,
+    scope_id: String,
+) -> Result<(), String> {
+    let connection = state.connection()?;
+    composer_draft_repository::delete_composer_draft(&connection, &scope_id).map_err(storage_error)
+}
+
+#[tauri::command]
+pub fn load_ui_preferences(state: State<'_, StorageState>) -> Result<UiPreferencesRecord, String> {
+    let connection = state.connection()?;
+    preferences_repository::load_ui_preferences(&connection).map_err(storage_error)
+}
+
+#[tauri::command]
+pub fn save_ui_preferences(
+    state: State<'_, StorageState>,
+    preferences: UiPreferencesRecord,
+) -> Result<UiPreferencesRecord, String> {
+    let connection = state.connection()?;
+    preferences_repository::save_ui_preferences(&connection, preferences).map_err(storage_error)
 }
 
 fn create_project_id(name: &str) -> String {

@@ -51,8 +51,20 @@ export interface ChatMessage {
   agentRun?: ChatAgentRunView;
 }
 
+export type ChatPermissionMode = "default" | "full";
+
+export interface ChatComposerDraft {
+  message: string;
+  permissionMode: ChatPermissionMode;
+  modelId: string;
+  projectId: string | null;
+  attachments: AgentInputAttachment[];
+  updatedAt: number;
+}
+
 export interface ChatSubmitOptions {
   modelId: string;
+  permissionMode: ChatPermissionMode;
   projectId: string | null;
   attachments?: AgentInputAttachment[];
 }

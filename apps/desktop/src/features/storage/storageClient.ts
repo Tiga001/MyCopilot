@@ -1,7 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { AgentInputAttachment } from "@agent";
 import type { ModelConfig, SearchMode } from "../../config/modelConfig";
 import type { AppProject } from "../../config/projectConfig";
-import type { ChatConversation, ChatMessage } from "../chat/chatTypes";
+import type { ChatComposerDraft, ChatConversation, ChatMessage } from "../chat/chatTypes";
 
 interface PersistedModelConfig {
   id: string;
@@ -58,10 +59,33 @@ interface PersistedChatConversation {
   archivedAt: number | null;
 }
 
+interface PersistedComposerDraft {
+  scopeId: string;
+  message: string;
+  permissionMode: ChatComposerDraft["permissionMode"];
+  modelId: string | null;
+  projectId: string | null;
+  attachmentsJson: string;
+  updatedAt: number;
+}
+
+export type SidebarConversationSort = "created" | "updated";
+export type SidebarProjectSort = "created" | "recent";
+export type SidebarSectionOrder = "projects_first" | "conversations_first";
+
+export interface UiPreferencesSnapshot {
+  sidebarConversationSort: SidebarConversationSort;
+  sidebarProjectSort: SidebarProjectSort;
+  sidebarSectionOrder: SidebarSectionOrder;
+  updatedAt: number;
+}
+
 export interface AppDataSnapshot {
   modelSettings: ModelSettingsSnapshot | null;
   projects: AppProject[];
   conversations: ChatConversation[];
+  composerDrafts: Record<string, ChatComposerDraft>;
+  uiPreferences: UiPreferencesSnapshot;
 }
 
 export async function loadAppData(): Promise<AppDataSnapshot> {
@@ -69,12 +93,16 @@ export async function loadAppData(): Promise<AppDataSnapshot> {
     modelSettings: PersistedModelSettingsSnapshot | null;
     projects: PersistedProject[];
     conversations: PersistedChatConversation[];
+    composerDrafts: PersistedComposerDraft[];
+    uiPreferences: UiPreferencesSnapshot;
   }>("load_app_data");
 
   return {
     modelSettings: snapshot.modelSettings ? mapModelSettingsFromPersistence(snapshot.modelSettings) : null,
     projects: snapshot.projects.map(mapProjectFromPersistence),
     conversations: snapshot.conversations.map(mapConversationFromPersistence),
+    composerDrafts: mapDraftsFromPersistence(snapshot.composerDrafts),
+    uiPreferences: normalizeUiPreferences(snapshot.uiPreferences),
   };
 }
 
@@ -131,6 +159,34 @@ export async function saveConversation(conversation: ChatConversation): Promise<
 
 export async function deleteStoredConversation(conversationId: string): Promise<void> {
   await invoke("delete_conversation", { conversationId });
+}
+
+export async function loadComposerDrafts(): Promise<Record<string, ChatComposerDraft>> {
+  const drafts = await invoke<PersistedComposerDraft[]>("load_composer_drafts");
+  return mapDraftsFromPersistence(drafts);
+}
+
+export async function saveComposerDraft(scopeId: string, draft: ChatComposerDraft): Promise<ChatComposerDraft> {
+  const savedDraft = await invoke<PersistedComposerDraft>("save_composer_draft", {
+    draft: mapDraftToPersistence(scopeId, draft),
+  });
+  return mapDraftFromPersistence(savedDraft);
+}
+
+export async function deleteStoredComposerDraft(scopeId: string): Promise<void> {
+  await invoke("delete_composer_draft", { scopeId });
+}
+
+export async function loadUiPreferences(): Promise<UiPreferencesSnapshot> {
+  const preferences = await invoke<UiPreferencesSnapshot>("load_ui_preferences");
+  return normalizeUiPreferences(preferences);
+}
+
+export async function saveUiPreferences(preferences: UiPreferencesSnapshot): Promise<UiPreferencesSnapshot> {
+  const savedPreferences = await invoke<UiPreferencesSnapshot>("save_ui_preferences", {
+    preferences: normalizeUiPreferences(preferences),
+  });
+  return normalizeUiPreferences(savedPreferences);
 }
 
 function mapModelSettingsFromPersistence(settings: PersistedModelSettingsSnapshot): ModelSettingsSnapshot {
@@ -209,5 +265,66 @@ function mapMessageToPersistence(message: ChatMessage): PersistedChatMessage {
     content: message.content,
     createdAt: message.createdAt,
     status: message.status ?? null,
+  };
+}
+
+function mapDraftsFromPersistence(drafts: PersistedComposerDraft[]): Record<string, ChatComposerDraft> {
+  return drafts.reduce<Record<string, ChatComposerDraft>>((accumulator, draft) => {
+    accumulator[draft.scopeId] = mapDraftFromPersistence(draft);
+    return accumulator;
+  }, {});
+}
+
+function mapDraftFromPersistence(draft: PersistedComposerDraft): ChatComposerDraft {
+  return {
+    message: draft.message,
+    permissionMode: draft.permissionMode === "default" ? "default" : "full",
+    modelId: draft.modelId ?? "",
+    projectId: draft.projectId,
+    attachments: parseDraftAttachments(draft.attachmentsJson),
+    updatedAt: draft.updatedAt,
+  };
+}
+
+function mapDraftToPersistence(scopeId: string, draft: ChatComposerDraft): PersistedComposerDraft {
+  return {
+    scopeId,
+    message: draft.message,
+    permissionMode: draft.permissionMode,
+    modelId: draft.modelId || null,
+    projectId: draft.projectId,
+    attachmentsJson: JSON.stringify(draft.attachments),
+    updatedAt: draft.updatedAt,
+  };
+}
+
+function parseDraftAttachments(value: string): AgentInputAttachment[] {
+  try {
+    const parsed = JSON.parse(value) as AgentInputAttachment[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export function defaultUiPreferences(): UiPreferencesSnapshot {
+  return {
+    sidebarConversationSort: "updated",
+    sidebarProjectSort: "created",
+    sidebarSectionOrder: "projects_first",
+    updatedAt: 0,
+  };
+}
+
+function normalizeUiPreferences(preferences: UiPreferencesSnapshot | null | undefined): UiPreferencesSnapshot {
+  const defaults = defaultUiPreferences();
+  if (!preferences) return defaults;
+
+  return {
+    sidebarConversationSort: preferences.sidebarConversationSort === "created" ? "created" : "updated",
+    sidebarProjectSort: preferences.sidebarProjectSort === "recent" ? "recent" : "created",
+    sidebarSectionOrder:
+      preferences.sidebarSectionOrder === "conversations_first" ? "conversations_first" : "projects_first",
+    updatedAt: preferences.updatedAt ?? 0,
   };
 }

@@ -54,6 +54,7 @@
 .left-sidebar__conversation-title-button:focus-visible,
 .left-sidebar__section-title-button:focus-visible,
 .left-sidebar__section-action:focus-visible,
+.left-sidebar__section-menu-item:focus-visible,
 .left-sidebar__project-main:focus-visible,
 .left-sidebar__project-action:focus-visible,
 .left-sidebar__project-menu-item:focus-visible,
@@ -84,6 +85,10 @@
 
 .left-sidebar__pinned {
   margin-top: 34px;
+}
+
+.left-sidebar__section {
+  position: relative;
 }
 
 .left-sidebar__projects {
@@ -183,6 +188,89 @@
 .left-sidebar__conversation-action:hover {
   color: var(--mc-color-icon-default);
   background: transparent;
+}
+
+.left-sidebar__section-action[data-open="true"],
+.left-sidebar__conversation-action[data-open="true"] {
+  color: var(--mc-color-icon-default);
+}
+
+.left-sidebar__section-menu,
+.left-sidebar__section-submenu {
+  position: absolute;
+  z-index: 45;
+  display: grid;
+  width: min(224px, calc(100vw - 48px));
+  padding: 10px;
+  gap: 2px;
+  color: var(--mc-color-text-primary);
+  background: var(--mc-color-surface-glass);
+  border: 1px solid var(--mc-color-border-hairline);
+  border-radius: var(--mc-radius-card);
+  box-shadow: var(--mc-shadow-sidebar-menu);
+  backdrop-filter: var(--mc-effect-blur-popover);
+}
+
+.left-sidebar__section-menu {
+  top: 34px;
+  left: 0;
+}
+
+.left-sidebar__section-submenu {
+  top: 48px;
+  left: calc(100% - 8px);
+}
+
+.left-sidebar__section-menu-divider {
+  height: 1px;
+  margin: 6px 4px;
+  background: var(--mc-color-border-hairline);
+}
+
+.left-sidebar__section-menu-item {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  min-height: 38px;
+  padding: 0 10px;
+  gap: 8px;
+  color: var(--mc-color-text-primary);
+  text-align: left;
+  border-radius: var(--mc-radius-lg);
+  font-size: var(--mc-font-size-sidebar-action);
+  font-weight: var(--mc-font-weight-semibold);
+  line-height: var(--mc-line-height-sidebar);
+}
+
+.left-sidebar__section-menu-item:hover:not(:disabled),
+.left-sidebar__section-menu-item[data-open="true"] {
+  background: var(--mc-color-state-hover);
+}
+
+.left-sidebar__section-menu-item:disabled {
+  cursor: default;
+  opacity: 0.38;
+}
+
+.left-sidebar__section-menu-item svg {
+  width: 20px;
+  height: 20px;
+  color: var(--mc-color-icon-subtle);
+  stroke-width: var(--mc-icon-stroke-regular);
+}
+
+.left-sidebar__section-menu-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.left-sidebar__section-menu-item__chevron {
+  transform: rotate(-90deg);
+}
+
+.left-sidebar__section-menu-item .left-sidebar__section-menu-check {
+  color: var(--mc-color-icon-default);
 }
 
 .left-sidebar__section-title {
@@ -496,6 +584,17 @@
   transition: opacity 120ms ease;
 }
 
+.left-sidebar__conversation-spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  vertical-align: -3px;
+  border: 2px solid var(--mc-color-border-strong);
+  border-top-color: transparent;
+  border-radius: 999px;
+  animation: left-sidebar-conversation-spinner 850ms linear infinite;
+}
+
 .left-sidebar__conversation-item-actions {
   position: absolute;
   right: 6px;
@@ -513,10 +612,21 @@
   opacity: 0;
 }
 
+.left-sidebar__conversation-row[data-pending="true"]:hover .left-sidebar__conversation-age,
+.left-sidebar__conversation-row[data-pending="true"]:focus-within .left-sidebar__conversation-age {
+  opacity: 1;
+}
+
 .left-sidebar__conversation-row:hover .left-sidebar__conversation-item-actions,
 .left-sidebar__conversation-row:focus-within .left-sidebar__conversation-item-actions {
   opacity: 1;
   pointer-events: auto;
+}
+
+.left-sidebar__conversation-row[data-pending="true"]:hover .left-sidebar__conversation-item-actions,
+.left-sidebar__conversation-row[data-pending="true"]:focus-within .left-sidebar__conversation-item-actions {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .left-sidebar__conversation-item-action {
@@ -554,6 +664,12 @@
 .left-sidebar__conversation-pin-icon {
   transform: rotate(45deg);
   transform-origin: center;
+}
+
+@keyframes left-sidebar-conversation-spinner {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .left-sidebar__settings {

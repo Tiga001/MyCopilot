@@ -18,20 +18,20 @@ import { useFrontendConfig } from "../../../config/FrontendConfigProvider";
 import { useModelSettings } from "../../../config/ModelSettingsProvider";
 import { useProjectSettings } from "../../../config/ProjectSettingsProvider";
 import type { TranslationKey } from "../../../config/frontendTranslations";
-import { modelConfig } from "../../../config/modelConfig";
+import { useDismissOnOutsidePointer } from "../../../hooks/useDismissOnOutsidePointer";
 import {
   buildAgentInputAttachments,
+  composerAttachmentFromAgentAttachment,
+  createComposerAttachmentsFromFiles,
   createAttachmentSummary,
   selectComposerAttachments,
 } from "../chatAttachments";
 import type { ComposerAttachment, ComposerAttachmentKind } from "../chatAttachments";
-import type { ChatSubmitOptions } from "../chatTypes";
+import type { ChatComposerDraft, ChatPermissionMode, ChatSubmitOptions } from "../chatTypes";
 import "./ChatComposer.css";
 
-type PermissionMode = "default" | "full";
-
 interface PermissionOption {
-  id: PermissionMode;
+  id: ChatPermissionMode;
   labelKey: TranslationKey;
   icon: LucideIcon;
 }
@@ -42,183 +42,22 @@ const PERMISSION_OPTIONS: PermissionOption[] = [
 ];
 
 const TEXTAREA_MAX_HEIGHT = 220;
-const READABLE_FILE_ACCEPT = [
-  "text/*",
-  "application/json",
-  "application/javascript",
-  "application/xml",
-  "application/x-httpd-php",
-  "application/x-sh",
-  "application/x-sql",
-  "application/x-toml",
-  "application/x-yaml",
-  "text/csv",
-  "text/html",
-  "text/javascript",
-  "text/markdown",
-  "text/plain",
-  "text/x-c",
-  "text/x-c++",
-  "text/x-csharp",
-  "text/x-go",
-  "text/x-java-source",
-  "text/x-kotlin",
-  "text/x-php",
-  "text/x-python",
-  "text/x-ruby",
-  "text/x-rust",
-  "text/x-scss",
-  "text/x-shellscript",
-  "text/x-sql",
-  "text/x-swift",
-  "text/xml",
-  "text/yaml",
-  "text/tab-separated-values",
-  "application/pdf",
-  "application/msword",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  "application/vnd.ms-powerpoint",
-  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-  "application/vnd.ms-excel",
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  ".pdf",
-  ".docx",
-  ".doc",
-  ".pptx",
-  ".ppt",
-  ".xlsx",
-  ".xls",
-  ".csv",
-  ".tsv",
-  ".txt",
-  ".text",
-  ".md",
-  ".markdown",
-  ".mdx",
-  ".rst",
-  ".log",
-  ".json",
-  ".jsonl",
-  ".yaml",
-  ".yml",
-  ".toml",
-  ".ini",
-  ".cfg",
-  ".conf",
-  ".env",
-  ".lock",
-  ".properties",
-  ".plist",
-  ".rc",
-  ".gitignore",
-  ".gitattributes",
-  ".editorconfig",
-  ".py",
-  ".pyi",
-  ".ipynb",
-  ".js",
-  ".jsx",
-  ".ts",
-  ".tsx",
-  ".mjs",
-  ".cjs",
-  ".d.ts",
-  ".html",
-  ".htm",
-  ".css",
-  ".scss",
-  ".sass",
-  ".less",
-  ".xml",
-  ".svg",
-  ".sql",
-  ".graphql",
-  ".gql",
-  ".proto",
-  ".prisma",
-  ".sh",
-  ".bash",
-  ".zsh",
-  ".fish",
-  ".ps1",
-  ".bat",
-  ".cmd",
-  ".rs",
-  ".go",
-  ".java",
-  ".kt",
-  ".kts",
-  ".c",
-  ".h",
-  ".cpp",
-  ".cc",
-  ".cxx",
-  ".hpp",
-  ".hh",
-  ".hxx",
-  ".cs",
-  ".php",
-  ".rb",
-  ".swift",
-  ".scala",
-  ".r",
-  ".m",
-  ".pl",
-  ".pm",
-  ".lua",
-  ".dart",
-  ".ex",
-  ".exs",
-  ".erl",
-  ".hrl",
-  ".clj",
-  ".cljs",
-  ".cljc",
-  ".edn",
-  ".fs",
-  ".fsi",
-  ".fsx",
-  ".elm",
-  ".hs",
-  ".lhs",
-  ".jl",
-  ".ml",
-  ".mli",
-  ".nim",
-  ".nims",
-  ".zig",
-  ".v",
-  ".vh",
-  ".sv",
-  ".svh",
-  ".sol",
-  ".tf",
-  ".tfvars",
-  ".hcl",
-  ".gradle",
-  ".groovy",
-  ".dockerfile",
-  ".cmake",
-  ".make",
-  ".mk",
-  ".tex",
-  ".bib",
-  ".vue",
-  ".svelte",
-  ".astro",
-].join(",");
 
 interface ChatComposerProps {
+  draft: ChatComposerDraft;
   defaultProjectId?: string | null;
   isGenerating?: boolean;
+  onDraftChange: (draft: ChatComposerDraft) => void;
   onSubmitMessage?: (message: string, options: ChatSubmitOptions) => void;
   onStopGenerating?: () => void;
   showProjectSelector?: boolean;
 }
 
 export function ChatComposer({
+  draft,
   defaultProjectId = null,
   isGenerating = false,
+  onDraftChange,
   onSubmitMessage,
   onStopGenerating,
   showProjectSelector = false,
@@ -227,18 +66,24 @@ export function ChatComposer({
   const { enabledModels } = useModelSettings();
   const { projects, selectProjectDirectory } = useProjectSettings();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const attachmentsRef = useRef<ComposerAttachment[]>([]);
-  const [message, setMessage] = useState("");
-  const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
+  const attachmentPickerRef = useRef<HTMLDivElement>(null);
+  const permissionPickerRef = useRef<HTMLDivElement>(null);
+  const modelPickerRef = useRef<HTMLDivElement>(null);
+  const projectPickerRef = useRef<HTMLDivElement>(null);
   const [isAttachmentMenuOpen, setIsAttachmentMenuOpen] = useState(false);
-  const [permissionMode, setPermissionMode] = useState<PermissionMode>("full");
   const [isPermissionMenuOpen, setIsPermissionMenuOpen] = useState(false);
   const [isModelMenuOpen, setIsModelMenuOpen] = useState(false);
   const [isProjectMenuOpen, setIsProjectMenuOpen] = useState(false);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [projectSearch, setProjectSearch] = useState("");
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(defaultProjectId);
-  const [selectedModelId, setSelectedModelId] = useState<string>(modelConfig.defaults.selectedModelId);
+  const message = draft.message;
+  const permissionMode = draft.permissionMode;
+  const selectedProjectId = draft.projectId;
+  const selectedModelId = draft.modelId;
+  const attachments = useMemo(
+    () => draft.attachments.map(composerAttachmentFromAgentAttachment),
+    [draft.attachments],
+  );
   const selectedPermission = PERMISSION_OPTIONS.find((option) => option.id === permissionMode) ?? PERMISSION_OPTIONS[0];
   const SelectedPermissionIcon = selectedPermission.icon;
   const selectedModel = useMemo(() => {
@@ -254,24 +99,34 @@ export function ChatComposer({
   const canSend = hasSendableContent && !hasUnsupportedImageAttachment && Boolean(selectedModel);
   const submitButtonState = isGenerating ? "stop" : canSend ? "ready" : "disabled";
 
-  useEffect(() => {
-    setSelectedProjectId(defaultProjectId);
-  }, [defaultProjectId]);
+  useDismissOnOutsidePointer(attachmentPickerRef, isAttachmentMenuOpen, () => setIsAttachmentMenuOpen(false));
+  useDismissOnOutsidePointer(permissionPickerRef, isPermissionMenuOpen, () => setIsPermissionMenuOpen(false));
+  useDismissOnOutsidePointer(modelPickerRef, isModelMenuOpen, () => setIsModelMenuOpen(false));
+  useDismissOnOutsidePointer(projectPickerRef, isProjectMenuOpen, () => setIsProjectMenuOpen(false));
+
+  const updateDraft = (patch: Partial<ChatComposerDraft>) => {
+    onDraftChange({
+      ...draft,
+      ...patch,
+      updatedAt: Date.now(),
+    });
+  };
 
   useEffect(() => {
-    if (selectedProjectId && !projects.some((project) => project.id === selectedProjectId)) {
-      setSelectedProjectId(null);
+    if (showProjectSelector && defaultProjectId !== null && defaultProjectId !== draft.projectId) {
+      updateDraft({ projectId: defaultProjectId });
     }
-  }, [projects, selectedProjectId]);
+  }, [defaultProjectId, showProjectSelector]);
+
+  useEffect(() => {
+    if (draft.projectId && !projects.some((project) => project.id === draft.projectId)) {
+      updateDraft({ projectId: null });
+    }
+  }, [draft.projectId, projects]);
 
   useEffect(() => {
     if (!selectedModel && enabledModels.length > 0) {
-      setSelectedModelId(enabledModels[0].id);
-      return;
-    }
-
-    if (selectedModel) {
-      setSelectedModelId(selectedModel.id);
+      updateDraft({ modelId: enabledModels[0].id });
     }
   }, [enabledModels, selectedModel]);
 
@@ -284,20 +139,6 @@ export function ChatComposer({
     textarea.style.height = `${nextHeight}px`;
     textarea.style.overflowY = textarea.scrollHeight > TEXTAREA_MAX_HEIGHT ? "auto" : "hidden";
   }, [message]);
-
-  useEffect(() => {
-    attachmentsRef.current = attachments;
-  }, [attachments]);
-
-  useEffect(() => {
-    return () => {
-      attachmentsRef.current.forEach((attachment) => {
-        if (attachment.previewUrl) {
-          URL.revokeObjectURL(attachment.previewUrl);
-        }
-      });
-    };
-  }, []);
 
   const submitMessage = async () => {
     if (isGenerating || !canSend) return;
@@ -318,38 +159,26 @@ export function ChatComposer({
     onSubmitMessage?.(messageContent, {
       attachments: inputAttachments,
       modelId: selectedModel?.id ?? selectedModelId,
+      permissionMode,
       projectId: selectedProject?.id ?? null,
     });
-    setMessage("");
-    clearAttachments();
+    updateDraft({
+      message: "",
+      attachments: [],
+      modelId: selectedModel?.id ?? selectedModelId,
+      permissionMode,
+      projectId: selectedProject?.id ?? null,
+    });
     setIsAttachmentMenuOpen(false);
     setIsPermissionMenuOpen(false);
     setIsModelMenuOpen(false);
     setIsProjectMenuOpen(false);
   };
 
-  const clearAttachments = () => {
-    setAttachments((currentAttachments) => {
-      currentAttachments.forEach((attachment) => {
-        if (attachment.previewUrl) {
-          URL.revokeObjectURL(attachment.previewUrl);
-        }
-      });
-
-      return [];
-    });
-  };
-
   const removeAttachment = (attachmentId: string) => {
-    setAttachments((currentAttachments) =>
-      currentAttachments.filter((attachment) => {
-        if (attachment.id !== attachmentId) return true;
-        if (attachment.previewUrl) {
-          URL.revokeObjectURL(attachment.previewUrl);
-        }
-        return false;
-      }),
-    );
+    updateDraft({
+      attachments: draft.attachments.filter((attachment) => attachment.id !== attachmentId),
+    });
   };
 
   const addAttachments = async (kind: ComposerAttachmentKind) => {
@@ -368,16 +197,38 @@ export function ChatComposer({
       return;
     }
 
-    setAttachments((currentAttachments) => [...currentAttachments, ...nextAttachments]);
+    updateDraft({
+      attachments: [
+        ...draft.attachments,
+        ...buildAgentInputAttachments(nextAttachments),
+      ],
+    });
     setAttachmentError(null);
     setIsAttachmentMenuOpen(false);
+  };
+
+  const addDroppedOrPastedFiles = async (files: FileList | File[]) => {
+    if (files.length === 0) return;
+
+    try {
+      const nextAttachments = await createComposerAttachmentsFromFiles(files);
+      updateDraft({
+        attachments: [
+          ...draft.attachments,
+          ...buildAgentInputAttachments(nextAttachments),
+        ],
+      });
+      setAttachmentError(null);
+    } catch (error) {
+      setAttachmentError(error instanceof Error ? error.message : String(error));
+    }
   };
 
   const handleSelectProjectDirectory = async () => {
     const project = await selectProjectDirectory();
     if (!project) return;
 
-    setSelectedProjectId(project.id);
+    updateDraft({ projectId: project.id });
     setProjectSearch("");
     setIsProjectMenuOpen(false);
   };
@@ -391,6 +242,21 @@ export function ChatComposer({
         event.preventDefault();
         submitMessage();
       }}
+      onDragOver={(event) => {
+        if (event.dataTransfer.types.includes("Files")) {
+          event.preventDefault();
+        }
+      }}
+      onDrop={(event) => {
+        if (event.dataTransfer.files.length === 0) return;
+        event.preventDefault();
+        void addDroppedOrPastedFiles(event.dataTransfer.files);
+      }}
+      onPaste={(event) => {
+        if (event.clipboardData.files.length === 0) return;
+        event.preventDefault();
+        void addDroppedOrPastedFiles(event.clipboardData.files);
+      }}
     >
       <textarea
         ref={textareaRef}
@@ -398,7 +264,7 @@ export function ChatComposer({
         placeholder={t("chat.inputPlaceholder")}
         aria-label={t("chat.inputAria")}
         rows={1}
-        onChange={(event) => setMessage(event.target.value)}
+        onChange={(event) => updateDraft({ message: event.target.value })}
         onKeyDown={(event) => {
           if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
 
@@ -437,7 +303,7 @@ export function ChatComposer({
       {attachmentError && <p className="chat-composer__warning">{attachmentError}</p>}
 
       <div className="chat-composer__toolbar">
-        <div className="composer-add-picker">
+        <div className="composer-add-picker" ref={attachmentPickerRef}>
           <button
             type="button"
             className="composer-icon-button"
@@ -469,7 +335,7 @@ export function ChatComposer({
           )}
         </div>
 
-        <div className="composer-permission-picker">
+        <div className="composer-permission-picker" ref={permissionPickerRef}>
           <button
             type="button"
             className="composer-permission-button"
@@ -509,7 +375,7 @@ export function ChatComposer({
                     data-selected={isSelected || undefined}
                     key={option.id}
                     onClick={() => {
-                      setPermissionMode(option.id);
+                      updateDraft({ permissionMode: option.id });
                       setIsPermissionMenuOpen(false);
                     }}
                   >
@@ -525,7 +391,7 @@ export function ChatComposer({
 
         <span className="chat-composer__spacer" />
 
-        <div className="composer-model-picker">
+        <div className="composer-model-picker" ref={modelPickerRef}>
           <button
             type="button"
             className="composer-model-button"
@@ -564,7 +430,7 @@ export function ChatComposer({
                       data-selected={isSelected || undefined}
                       key={model.id}
                       onClick={() => {
-                        setSelectedModelId(model.id);
+                        updateDraft({ modelId: model.id });
                         setIsModelMenuOpen(false);
                       }}
                     >
@@ -598,7 +464,7 @@ export function ChatComposer({
 
       {showProjectSelector && (
         <div className="chat-composer__project-row">
-          <div className="composer-project-picker">
+          <div className="composer-project-picker" ref={projectPickerRef}>
             <button
               className="composer-project-button"
               type="button"
@@ -639,7 +505,7 @@ export function ChatComposer({
                         aria-selected={isSelected}
                         key={project.id}
                         onClick={() => {
-                          setSelectedProjectId(project.id);
+                          updateDraft({ projectId: project.id });
                           setProjectSearch("");
                           setIsProjectMenuOpen(false);
                         }}
@@ -670,7 +536,7 @@ export function ChatComposer({
                   className="composer-project-command"
                   type="button"
                   onClick={() => {
-                    setSelectedProjectId(null);
+                    updateDraft({ projectId: null });
                     setProjectSearch("");
                     setIsProjectMenuOpen(false);
                   }}
