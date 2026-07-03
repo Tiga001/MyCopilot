@@ -2322,6 +2322,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "time",
+ "url",
 ]
 
 [[package]]

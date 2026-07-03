@@ -1,16 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
-  CheckCircle2,
   ChevronDown,
   Check,
   Copy,
   PencilLine,
   SquareTerminal,
-  XCircle,
 } from "lucide-react";
-import type { AgentProposedAction, AgentToolCall, AgentToolResult } from "@agent";
-import type { ChatAgentRunView, ChatAgentTimelineItem, ChatMessage } from "../chatTypes";
+import type { AgentProposedAction } from "@agent";
+import type {
+  ChatAgentRunView,
+  ChatAgentTimelineItem,
+  ChatMessage,
+} from "../chatTypes";
+import { getUniqueWebSearchSources } from "../agentWebSearch";
 import {
   getAttachmentBadgeLabel,
   getAttachmentExtension,
@@ -18,6 +21,9 @@ import {
   getAttachmentPreviewUrl,
 } from "../attachmentDisplay";
 import { ChatMarkdown } from "./ChatMarkdown";
+import { AgentToolActivity } from "./toolActivities/AgentToolActivity";
+import { AssistantSources } from "./toolActivities/WebSearchSources";
+import { formatToolDetails, getToolDisplayName } from "./toolActivities/toolActivityUtils";
 
 const ACTIVE_STREAMING_GRACE_MS = 1200;
 const COPIED_INDICATOR_MS = 1300;
@@ -29,16 +35,6 @@ interface ChatMessageItemProps {
   onCancel?: (messageId: string, action: AgentProposedAction) => void;
   onReject?: (messageId: string, action: AgentProposedAction) => void;
   onUiStateChange?: (messageId: string, uiState: ChatMessage["uiState"]) => void;
-}
-
-function formatDetails(value: unknown) {
-  if (typeof value === "string") return value;
-
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
 }
 
 function formatMessageTime(timestamp: number | undefined) {
@@ -93,43 +89,6 @@ function getActionId(action: AgentProposedAction) {
 
 function getActionById(run: ChatAgentRunView, actionId: string) {
   return run.approvals.find((action) => getActionId(action) === actionId);
-}
-
-function getToolDisplayName(tool: string) {
-  const labels: Record<string, string> = {
-    apply_patch: "应用修改",
-    attachments_list: "列出对话附件",
-    attachments_list_project: "列出项目附件",
-    generate_patch: "生成修改",
-    git_diff: "读取 Git diff",
-    read_file: "读取文件",
-    read_image: "读取图片",
-    read_pdf: "读取 PDF",
-    read_presentation: "读取演示文稿",
-    read_spreadsheet: "读取表格",
-    read_word: "读取文档",
-    run_command: "运行命令",
-    search_code: "搜索代码",
-    search_files: "列出文件",
-    web_fetch: "读取网页",
-    web_search: "联网搜索",
-  };
-
-  return labels[tool] ?? tool;
-}
-
-function getToolCallLabel(call: AgentToolCall, result?: AgentToolResult) {
-  const name = getToolDisplayName(call.tool);
-
-  if (!result) {
-    return call.approvalStatus === "required" ? `等待审批 ${name}` : `正在${name}`;
-  }
-
-  if (!result.ok) {
-    return `${name}失败`;
-  }
-
-  return `已${name}`;
 }
 
 function isRunSettled(run: ChatAgentRunView) {
@@ -367,47 +326,6 @@ function ChatMessageActions({ content, timestamp }: { content: string; timestamp
   );
 }
 
-function AgentToolActivity({ call, result }: { call: AgentToolCall; result?: AgentToolResult }) {
-  const hasDetails = call.args !== undefined || call.reason || result;
-  const Icon = result?.ok === false ? XCircle : result ? CheckCircle2 : SquareTerminal;
-  const isPending = !result;
-
-  return (
-    <details className="agent-activity">
-      <summary>
-        <Icon aria-hidden="true" />
-        <span className={isPending ? "agent-running-text" : undefined}>
-          {getToolCallLabel(call, result)}
-        </span>
-        {hasDetails && <ChevronDown className="agent-activity__chevron" aria-hidden="true" />}
-      </summary>
-      {hasDetails && (
-        <div className="agent-activity__details">
-          {call.reason && <p>{call.reason}</p>}
-          {call.args !== undefined && (
-            <>
-              <span>参数</span>
-              <pre>{formatDetails(call.args)}</pre>
-            </>
-          )}
-          {result?.error && (
-            <>
-              <span>错误</span>
-              <pre>{result.error}</pre>
-            </>
-          )}
-          {result?.result !== undefined && (
-            <>
-              <span>结果</span>
-              <pre>{formatDetails(result.result)}</pre>
-            </>
-          )}
-        </div>
-      )}
-    </details>
-  );
-}
-
 function AgentDiffActivity({ run, diffId }: { run: ChatAgentRunView; diffId: string }) {
   const diff = run.diffs.find((candidate) => candidate.id === diffId);
   if (!diff) return null;
@@ -439,7 +357,7 @@ function getApprovalTitle(action: AgentProposedAction) {
 function getApprovalDetails(action: AgentProposedAction) {
   if (action.type === "diff") return action.diff.summary ?? action.diff.patch;
   if (action.type === "command") return action.command.reason ?? action.command.cwd ?? "";
-  return action.call.reason ?? formatDetails(action.call.args);
+  return action.call.reason ?? formatToolDetails(action.call.args);
 }
 
 function AgentApprovalActivity({
@@ -530,7 +448,8 @@ function AgentTimelineItemView({
   if (item.type === "tool_call") {
     const call = run.toolCalls.find((candidate) => candidate.id === item.callId);
     if (!call) return null;
-    return <AgentToolActivity call={call} result={getToolResult(run, call.id)} />;
+    const activity = run.webSearchActivities?.find((candidate) => candidate.callId === call.id);
+    return <AgentToolActivity activity={activity} call={call} result={getToolResult(run, call.id)} />;
   }
 
   if (item.type === "diff") {
@@ -635,6 +554,7 @@ function AgentRunView({
     !isStreamingAssistantText &&
     shouldShowThinkingActivity(run, timeline);
   const showTokenLimitNotice = isRunSettled(run) && isTokenLimitFinishReason(run.finishReason);
+  const webSearchSources = getUniqueWebSearchSources(run);
 
   return (
     <div className="agent-run">
@@ -665,6 +585,7 @@ function AgentRunView({
       {showFinalContent && (
         <ChatMarkdown className="chat-agent-text" content={finalAnswerContent} />
       )}
+      {isRunSettled(run) && <AssistantSources sources={webSearchSources} />}
       {showTokenLimitNotice && (
         <div className="agent-run__notice" role="status">
           <AlertTriangle aria-hidden="true" />

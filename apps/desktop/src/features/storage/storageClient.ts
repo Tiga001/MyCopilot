@@ -10,6 +10,7 @@ import type {
   ChatMessageAttachment,
   ChatMessageUiState,
 } from "../chat/chatTypes";
+import { normalizeWebSearchActivities } from "../chat/agentWebSearch";
 
 interface PersistedModelConfig {
   id: string;
@@ -395,6 +396,10 @@ function stringifyJsonField(value: unknown): string | null {
 }
 
 function normalizePersistedAgentRun(agentRun: ChatAgentRunView): ChatAgentRunView {
+  const agentRunWithToolDetails: ChatAgentRunView = {
+    ...agentRun,
+    webSearchActivities: normalizeWebSearchActivities(agentRun),
+  };
   const hasCompletedAt = Boolean(agentRun.completedAt);
   const isActive =
     agentRun.status === "starting" ||
@@ -402,12 +407,12 @@ function normalizePersistedAgentRun(agentRun: ChatAgentRunView): ChatAgentRunVie
     agentRun.status === "waiting_for_approval";
 
   if (!isActive || hasCompletedAt) {
-    return agentRun;
+    return agentRunWithToolDetails;
   }
 
   const interruptedAt = agentRun.lastResponseAt ?? agentRun.firstResponseAt ?? agentRun.startedAt ?? Date.now();
   return {
-    ...agentRun,
+    ...agentRunWithToolDetails,
     status: "cancelled",
     completedAt: interruptedAt,
     error: agentRun.error ?? "应用关闭后，该次处理已中断。",

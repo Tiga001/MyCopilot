@@ -13,6 +13,11 @@ import type {
 } from "../features/chat/chatTypes";
 import { THINKING_PLACEHOLDER } from "./appConstants";
 import { getAgentActionId } from "./agentActionUtils";
+import {
+  normalizeWebSearchActivities,
+  upsertWebSearchActivityFromCall,
+  upsertWebSearchActivityFromResult,
+} from "../features/chat/agentWebSearch";
 
 function createAgentRun(
   runId: string | null,
@@ -31,6 +36,7 @@ function createAgentRun(
     approvals: [],
     diffs: [],
     commandOutputs: [],
+    webSearchActivities: [],
     timeline: [],
   };
 }
@@ -275,6 +281,7 @@ export function applyAgentEventToChatMessage(message: ChatMessage, agentEvent: A
         ...currentRun,
         status: "running",
         toolCalls: upsertById(currentRun.toolCalls, agentEvent.call, (call) => call.id),
+        webSearchActivities: upsertWebSearchActivityFromCall(currentRun, agentEvent.call),
         timeline: appendTimelineItem(currentRun, {
           id: `tool-call-${agentEvent.call.id}`,
           type: "tool_call",
@@ -292,6 +299,7 @@ export function applyAgentEventToChatMessage(message: ChatMessage, agentEvent: A
         ...currentRun,
         status: "running",
         toolResults: upsertById(currentRun.toolResults, agentEvent.result, (result) => result.callId),
+        webSearchActivities: upsertWebSearchActivityFromResult(currentRun, agentEvent.result),
       },
     };
   }
@@ -490,6 +498,7 @@ export function applyAgentActionExecutionToChatMessage(
     agentRun: {
       ...currentRun,
       commandOutputs: [...currentRun.commandOutputs, ...commandOutputs],
+      webSearchActivities: normalizeWebSearchActivities(currentRun),
       timeline: [
         ...currentRun.timeline,
         ...commandOutputs.map(

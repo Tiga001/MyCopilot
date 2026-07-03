@@ -27,6 +27,7 @@ pub fn run() {
             commands::agent_actions::agent_approve_action,
             commands::agent_actions::agent_reject_action,
             commands::agent_actions::agent_cancel_action,
+            commands::system::open_external_url,
             storage::commands::load_app_data,
             storage::commands::load_model_settings,
             storage::commands::save_model_settings,

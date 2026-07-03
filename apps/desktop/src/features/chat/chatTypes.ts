@@ -18,6 +18,32 @@ export interface ChatAgentCommandOutput {
   output: string;
 }
 
+export interface ChatWebSearchSource {
+  id: string;
+  title: string;
+  url: string;
+  displayUrl: string;
+  domain: string;
+  faviconDataUrl?: string;
+  faviconMimeType?: string;
+  snippet?: string;
+  score?: number;
+  publishedDate?: string;
+}
+
+export interface ChatWebSearchActivity {
+  callId: string;
+  query: string;
+  provider: string;
+  status: "running" | "completed" | "failed";
+  sources: ChatWebSearchSource[];
+  answer?: string;
+  error?: string;
+  responseTime?: number | string | null;
+  truncated?: boolean;
+  updatedAt: number;
+}
+
 export type ChatAgentTimelineItem =
   | { id: string; type: "message"; content: string }
   | { id: string; type: "tool_call"; callId: string }
@@ -36,6 +62,7 @@ export interface ChatAgentRunView {
   toolDefinitions: AgentToolDefinition[];
   toolCalls: AgentToolCall[];
   toolResults: AgentToolResult[];
+  webSearchActivities?: ChatWebSearchActivity[];
   approvals: AgentProposedAction[];
   diffs: AgentDiffProposal[];
   commandOutputs: ChatAgentCommandOutput[];

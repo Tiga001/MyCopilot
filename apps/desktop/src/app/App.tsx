@@ -157,6 +157,7 @@ function getImmediateAgentRunSignature(message: ChatMessage) {
     usage: run.usage ?? null,
     toolCalls: run.toolCalls,
     toolResults: run.toolResults,
+    webSearchActivities: run.webSearchActivities ?? [],
     approvals: run.approvals,
     diffs: run.diffs,
     commandOutputs: run.commandOutputs,
