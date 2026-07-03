@@ -2,7 +2,8 @@ use crate::agent_actions::pending::action_id;
 use crate::agent_actions::AgentActionState;
 use crate::fs::canonical_workspace_root;
 use crate::storage::models::{
-    AttachmentRecord, ChatConversationRecord, ChatMessageRecord, ProjectRecord,
+    AttachmentRecord, ChatConversationRecord, ChatMessageAttachmentRecord, ChatMessageRecord,
+    ProjectRecord,
 };
 use crate::storage::{
     attachment_repository, chat_repository, config_repository, now_ms, project_repository,
@@ -213,6 +214,7 @@ fn prepare_conversation_turn(
         updated_at: timestamp,
         pinned_at: None,
         archived_at: None,
+        unread_at: None,
     });
 
     conversation.project_id = resolved_project_id.clone();
@@ -239,6 +241,9 @@ fn prepare_conversation_turn(
         content: content.clone(),
         created_at: timestamp,
         status: Some("sent".to_string()),
+        attachments: conversation_message_attachments_from_input(&input.attachments, timestamp),
+        agent_run_json: None,
+        ui_state_json: None,
     };
     let assistant_message = ChatMessageRecord {
         id: assistant_message_id.clone(),
@@ -246,6 +251,9 @@ fn prepare_conversation_turn(
         content: "正在思考...".to_string(),
         created_at: timestamp + 1,
         status: Some("pending".to_string()),
+        attachments: Vec::new(),
+        agent_run_json: None,
+        ui_state_json: None,
     };
 
     upsert_message(&mut conversation.messages, user_message.clone());
@@ -372,6 +380,39 @@ fn persist_turn_attachments(
     }
 
     Ok(())
+}
+
+fn conversation_message_attachments_from_input(
+    attachments: &[AgentInputAttachment],
+    created_at: i64,
+) -> Vec<ChatMessageAttachmentRecord> {
+    attachments
+        .iter()
+        .map(|attachment| {
+            let preview_data = if attachment.kind == AgentInputAttachmentKind::Image
+                && attachment.encoding == AgentInputAttachmentEncoding::Base64
+                && attachment
+                    .mime_type
+                    .as_deref()
+                    .is_some_and(|mime_type| mime_type.starts_with("image/"))
+            {
+                Some(attachment.data.clone())
+            } else {
+                None
+            };
+
+            ChatMessageAttachmentRecord {
+                id: safe_path_component(&attachment.id, "attachment"),
+                kind: input_attachment_kind_label(attachment.kind).to_string(),
+                name: attachment.name.clone(),
+                mime_type: attachment.mime_type.clone(),
+                size_bytes: attachment.size_bytes,
+                preview_mime_type: preview_data.as_ref().and(attachment.mime_type.clone()),
+                preview_data,
+                created_at,
+            }
+        })
+        .collect()
 }
 
 fn build_attachment_library_context(

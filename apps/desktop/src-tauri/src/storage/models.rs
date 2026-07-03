@@ -41,6 +41,34 @@ pub struct ChatMessageRecord {
     pub content: String,
     pub created_at: i64,
     pub status: Option<String>,
+    #[serde(default)]
+    pub attachments: Vec<ChatMessageAttachmentRecord>,
+    pub agent_run_json: Option<String>,
+    pub ui_state_json: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatMessageStateRecord {
+    pub id: String,
+    pub content: String,
+    pub status: Option<String>,
+    pub agent_run_json: Option<String>,
+    pub ui_state_json: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatConversationMetaRecord {
+    pub id: String,
+    pub project_id: Option<String>,
+    pub model_id: Option<String>,
+    pub title: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub pinned_at: Option<i64>,
+    pub archived_at: Option<i64>,
+    pub unread_at: Option<i64>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -60,6 +88,19 @@ pub struct AttachmentRecord {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
+pub struct ChatMessageAttachmentRecord {
+    pub id: String,
+    pub kind: String,
+    pub name: String,
+    pub mime_type: Option<String>,
+    pub size_bytes: u64,
+    pub preview_data: Option<String>,
+    pub preview_mime_type: Option<String>,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct ChatConversationRecord {
     pub id: String,
     pub project_id: Option<String>,
@@ -70,6 +111,7 @@ pub struct ChatConversationRecord {
     pub updated_at: i64,
     pub pinned_at: Option<i64>,
     pub archived_at: Option<i64>,
+    pub unread_at: Option<i64>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -89,6 +131,7 @@ pub struct ComposerDraftRecord {
 pub struct UiPreferencesRecord {
     pub sidebar_conversation_sort: String,
     pub sidebar_project_sort: String,
+    pub sidebar_project_order: Vec<String>,
     pub sidebar_section_order: String,
     pub updated_at: i64,
 }

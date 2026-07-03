@@ -7,6 +7,7 @@ import {
   Clock3,
   Folder,
   FolderOpen,
+  Mail,
   MoreHorizontal,
   NotebookText,
   PencilLine,
@@ -15,8 +16,8 @@ import {
   SquarePen,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import type { FormEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { FormEvent, PointerEvent as ReactPointerEvent } from "react";
 import { useFrontendConfig } from "../../config/FrontendConfigProvider";
 import type { AppProject } from "../../config/projectConfig";
 import type { ChatConversation } from "../../features/chat/chatTypes";
@@ -31,6 +32,20 @@ import "./LeftSidebar.css";
 type SidebarSectionScope = "projects" | "conversations";
 type SidebarSectionSubmenu = "organize" | "sort";
 type BulkArchiveScope = "projects" | "root";
+type ProjectDragPosition = "before" | "after";
+
+interface ProjectDragTarget {
+  projectId: string;
+  position: ProjectDragPosition;
+}
+
+interface ProjectPointerDragState {
+  hasMoved: boolean;
+  pointerId: number;
+  projectId: string;
+  sectionProjectIds: string[];
+  startY: number;
+}
 
 interface LeftSidebarProps {
   activeConversationId: string | null;
@@ -40,9 +55,11 @@ interface LeftSidebarProps {
   onArchiveAllRootConversations: () => void;
   onArchiveConversation: (conversationId: string) => void;
   onArchiveProjectConversations: (projectId: string) => void;
+  onMarkConversationUnread: (conversationId: string) => void;
   onNewConversation: (projectId?: string | null) => void;
   onOpenSettings: () => void;
   onRemoveProject: (projectId: string) => void;
+  onRenameConversation: (conversationId: string, title: string) => void;
   onRenameProject: (projectId: string, name: string) => void;
   onSelectConversation: (conversationId: string) => void;
   onShowProjectInFolder: (projectId: string) => void;
@@ -114,22 +131,43 @@ function sortPinnedProjects(projects: AppProject[]) {
     .sort((a, b) => (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0));
 }
 
+function sortProjectsByManualOrder(projects: AppProject[], projectOrder: string[]) {
+  const orderIndex = new Map(projectOrder.map((projectId, index) => [projectId, index]));
+
+  return [...projects].sort((a, b) => {
+    const aIndex = orderIndex.get(a.id);
+    const bIndex = orderIndex.get(b.id);
+
+    if (aIndex !== undefined || bIndex !== undefined) {
+      if (aIndex !== undefined && bIndex !== undefined) return aIndex - bIndex;
+      return aIndex !== undefined ? -1 : 1;
+    }
+
+    return a.createdAt - b.createdAt;
+  });
+}
+
 function sortRegularProjects(
   projects: AppProject[],
   conversationsByProjectId: Record<string, ChatConversation[]>,
   sort: SidebarProjectSort,
+  projectOrder: string[],
 ) {
-  return [...projects]
-    .filter((project) => !project.pinnedAt)
-    .sort((a, b) => {
-      if (sort === "recent") {
-        const aRecent = latestProjectConversationUpdatedAt(conversationsByProjectId[a.id] ?? []);
-        const bRecent = latestProjectConversationUpdatedAt(conversationsByProjectId[b.id] ?? []);
-        if (aRecent !== bRecent) return bRecent - aRecent;
-      }
+  const regularProjects = projects.filter((project) => !project.pinnedAt);
 
-      return a.createdAt - b.createdAt;
-    });
+  if (sort === "manual") {
+    return sortProjectsByManualOrder(regularProjects, projectOrder);
+  }
+
+  return [...regularProjects].sort((a, b) => {
+    if (sort === "recent") {
+      const aRecent = latestProjectConversationUpdatedAt(conversationsByProjectId[a.id] ?? []);
+      const bRecent = latestProjectConversationUpdatedAt(conversationsByProjectId[b.id] ?? []);
+      if (aRecent !== bRecent) return bRecent - aRecent;
+    }
+
+    return a.createdAt - b.createdAt;
+  });
 }
 
 function latestProjectConversationUpdatedAt(conversations: ChatConversation[]) {
@@ -162,11 +200,16 @@ function ConversationRow({
   conversation,
   justNow,
   language,
+  markUnreadLabel,
   now,
   onArchiveConversation,
+  onMarkConversationUnread,
+  onRenameConversation,
   onSelectConversation,
   onTogglePinConversation,
   pinLabel,
+  renameLabel,
+  unreadLabel,
   unpinLabel,
   nested = false,
 }: {
@@ -175,24 +218,45 @@ function ConversationRow({
   conversation: ChatConversation;
   justNow: string;
   language: string;
+  markUnreadLabel: string;
   now: number;
   onArchiveConversation: (conversationId: string) => void;
+  onMarkConversationUnread: (conversationId: string) => void;
+  onRenameConversation: (conversation: ChatConversation) => void;
   onSelectConversation: (conversationId: string) => void;
   onTogglePinConversation: (conversationId: string) => void;
   pinLabel: string;
+  renameLabel: string;
+  unreadLabel: string;
   unpinLabel: string;
   nested?: boolean;
 }) {
+  const conversationMenuRef = useRef<HTMLDivElement>(null);
+  const [menuPosition, setMenuPosition] = useState<{ x: number; y: number } | null>(null);
   const isPinned = Boolean(conversation.pinnedAt);
   const isPending = conversation.messages.some(
     (message) => message.role === "assistant" && message.status === "pending",
   );
+  const isUnread = Boolean(conversation.unreadAt && conversation.id !== activeConversationId && !isPending);
+  const canMarkUnread = conversation.id !== activeConversationId && !isPending && !conversation.unreadAt;
+  const isConversationMenuOpen = Boolean(menuPosition);
+
+  const closeConversationMenu = () => setMenuPosition(null);
+  useDismissOnOutsidePointer(conversationMenuRef, Boolean(menuPosition), closeConversationMenu);
 
   return (
     <div
       className={`left-sidebar__conversation-row${nested ? " left-sidebar__conversation-row--nested" : ""}`}
       data-active={conversation.id === activeConversationId || undefined}
+      data-menu-open={isConversationMenuOpen || undefined}
       data-pending={isPending || undefined}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        setMenuPosition({
+          x: Math.max(12, Math.min(event.clientX, window.innerWidth - 238)),
+          y: Math.max(12, Math.min(event.clientY, window.innerHeight - 190)),
+        });
+      }}
     >
       <button
         className="left-sidebar__conversation-main"
@@ -205,6 +269,8 @@ function ConversationRow({
       <span className="left-sidebar__conversation-age">
         {isPending ? (
           <span className="left-sidebar__conversation-spinner" aria-label="正在处理" />
+        ) : isUnread ? (
+          <span className="left-sidebar__conversation-unread-dot" aria-label={unreadLabel} />
         ) : (
           formatConversationAge(conversation.updatedAt, now, language, justNow)
         )}
@@ -215,8 +281,9 @@ function ConversationRow({
           className="left-sidebar__conversation-item-action"
           type="button"
           data-pinned={isPinned || undefined}
+          data-tooltip={isPinned ? unpinLabel : pinLabel}
           aria-label={isPinned ? unpinLabel : pinLabel}
-          title={isPinned ? unpinLabel : pinLabel}
+          disabled={isConversationMenuOpen}
           onClick={() => onTogglePinConversation(conversation.id)}
         >
           <ConversationPinIcon filled={isPinned} />
@@ -224,13 +291,75 @@ function ConversationRow({
         <button
           className="left-sidebar__conversation-item-action"
           type="button"
+          data-tooltip={archiveLabel}
           aria-label={archiveLabel}
-          title={archiveLabel}
+          disabled={isConversationMenuOpen}
           onClick={() => onArchiveConversation(conversation.id)}
         >
           <Archive aria-hidden="true" />
         </button>
       </div>
+
+      {menuPosition && (
+        <div
+          className="left-sidebar__conversation-menu"
+          role="menu"
+          ref={conversationMenuRef}
+          style={{ left: menuPosition.x, top: menuPosition.y }}
+        >
+          <button
+            className="left-sidebar__project-menu-item"
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              onTogglePinConversation(conversation.id);
+              closeConversationMenu();
+            }}
+          >
+            <Pin aria-hidden="true" />
+            <span>{isPinned ? unpinLabel : pinLabel}</span>
+          </button>
+          <button
+            className="left-sidebar__project-menu-item"
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              onRenameConversation(conversation);
+              closeConversationMenu();
+            }}
+          >
+            <PencilLine aria-hidden="true" />
+            <span>{renameLabel}</span>
+          </button>
+          <button
+            className="left-sidebar__project-menu-item"
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              onArchiveConversation(conversation.id);
+              closeConversationMenu();
+            }}
+          >
+            <Archive aria-hidden="true" />
+            <span>{archiveLabel}</span>
+          </button>
+          <button
+            className="left-sidebar__project-menu-item"
+            type="button"
+            role="menuitem"
+            disabled={!canMarkUnread}
+            onClick={() => {
+              if (!canMarkUnread) return;
+
+              onMarkConversationUnread(conversation.id);
+              closeConversationMenu();
+            }}
+          >
+            <Mail aria-hidden="true" />
+            <span>{markUnreadLabel}</span>
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -243,9 +372,11 @@ export function LeftSidebar({
   onArchiveAllRootConversations,
   onArchiveConversation,
   onArchiveProjectConversations,
+  onMarkConversationUnread,
   onNewConversation,
   onOpenSettings,
   onRemoveProject,
+  onRenameConversation,
   onRenameProject,
   onSelectConversation,
   onShowProjectInFolder,
@@ -264,12 +395,21 @@ export function LeftSidebar({
   const [openSectionSubmenu, setOpenSectionSubmenu] = useState<SidebarSectionSubmenu | null>(null);
   const [renamingProject, setRenamingProject] = useState<AppProject | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const [renamingConversation, setRenamingConversation] = useState<ChatConversation | null>(null);
+  const [conversationRenameValue, setConversationRenameValue] = useState("");
   const [pendingBulkArchiveScope, setPendingBulkArchiveScope] = useState<BulkArchiveScope | null>(null);
   const [pendingArchiveProject, setPendingArchiveProject] = useState<AppProject | null>(null);
   const [pendingRemoveProject, setPendingRemoveProject] = useState<AppProject | null>(null);
+  const [draggingProjectId, setDraggingProjectId] = useState<string | null>(null);
+  const [projectDragPreviewOrder, setProjectDragPreviewOrderState] = useState<string[] | null>(null);
   const [now, setNow] = useState(Date.now());
   const projectMenuRef = useRef<HTMLDivElement>(null);
   const sectionMenuRef = useRef<HTMLDivElement>(null);
+  const projectRowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const projectAnimationRectsRef = useRef<Map<string, DOMRect> | null>(null);
+  const projectPointerDragRef = useRef<ProjectPointerDragState | null>(null);
+  const projectDragPreviewOrderRef = useRef<string[] | null>(null);
+  const suppressProjectClickRef = useRef<string | null>(null);
   const projectIds = new Set(projects.map((project) => project.id));
   const visibleConversations = conversations.filter((conversation) => !conversation.archivedAt);
   const conversationsByProjectId = projects.reduce<Record<string, ChatConversation[]>>((accumulator, project) => {
@@ -284,7 +424,11 @@ export function LeftSidebar({
     projects,
     conversationsByProjectId,
     uiPreferences.sidebarProjectSort,
+    uiPreferences.sidebarProjectOrder,
   );
+  const displayRegularProjects = projectDragPreviewOrder
+    ? sortProjectsByManualOrder(regularProjects, projectDragPreviewOrder)
+    : regularProjects;
   const pinnedRootConversations = sortConversations(
     visibleConversations.filter(
       (conversation) =>
@@ -310,7 +454,11 @@ export function LeftSidebar({
   const bulkArchiveCount =
     pendingBulkArchiveScope === "projects" ? projectArchiveAllCount : rootArchiveAllCount;
 
-  useDismissOnOutsidePointer(projectMenuRef, Boolean(openProjectMenuId), () => setOpenProjectMenuId(null));
+  const closeProjectMenu = () => {
+    setOpenProjectMenuId(null);
+  };
+
+  useDismissOnOutsidePointer(projectMenuRef, Boolean(openProjectMenuId), closeProjectMenu);
   useDismissOnOutsidePointer(sectionMenuRef, Boolean(openSectionMenu), () => {
     setOpenSectionMenu(null);
     setOpenSectionSubmenu(null);
@@ -332,6 +480,34 @@ export function LeftSidebar({
     });
   }, [activeConversation?.projectId]);
 
+  useLayoutEffect(() => {
+    const previousRects = projectAnimationRectsRef.current;
+    if (!previousRects) return;
+
+    projectAnimationRectsRef.current = null;
+
+    for (const project of displayRegularProjects) {
+      const element = projectRowRefs.current.get(project.id);
+      const previousRect = previousRects.get(project.id);
+      if (!element || !previousRect) continue;
+
+      const nextRect = element.getBoundingClientRect();
+      const deltaY = previousRect.top - nextRect.top;
+      if (Math.abs(deltaY) < 1) continue;
+
+      element.animate(
+        [
+          { transform: `translateY(${deltaY}px)` },
+          { transform: "translateY(0)" },
+        ],
+        {
+          duration: 150,
+          easing: "cubic-bezier(0.2, 0, 0, 1)",
+        },
+      );
+    }
+  }, [displayRegularProjects]);
+
   const toggleProject = (projectId: string) => {
     setOpenProjectIds((currentIds) => {
       const nextIds = new Set(currentIds);
@@ -347,7 +523,7 @@ export function LeftSidebar({
   const startRenamingProject = (project: AppProject) => {
     setRenameValue(project.name);
     setRenamingProject(project);
-    setOpenProjectMenuId(null);
+    closeProjectMenu();
   };
 
   const submitRenameProject = (event: FormEvent<HTMLFormElement>) => {
@@ -362,6 +538,23 @@ export function LeftSidebar({
     setRenameValue("");
   };
 
+  const startRenamingConversation = (conversation: ChatConversation) => {
+    setConversationRenameValue(conversation.title);
+    setRenamingConversation(conversation);
+  };
+
+  const submitRenameConversation = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!renamingConversation) return;
+
+    const normalizedTitle = conversationRenameValue.trim();
+    if (!normalizedTitle) return;
+
+    onRenameConversation(renamingConversation.id, normalizedTitle);
+    setRenamingConversation(null);
+    setConversationRenameValue("");
+  };
+
   const closeSectionMenu = () => {
     setOpenSectionMenu(null);
     setOpenSectionSubmenu(null);
@@ -370,7 +563,7 @@ export function LeftSidebar({
   const openSectionActions = (scope: SidebarSectionScope) => {
     setOpenSectionMenu((currentScope) => (currentScope === scope ? null : scope));
     setOpenSectionSubmenu(null);
-    setOpenProjectMenuId(null);
+    closeProjectMenu();
   };
 
   const setConversationSort = (sort: SidebarConversationSort) => {
@@ -381,6 +574,176 @@ export function LeftSidebar({
   const setProjectSort = (sort: SidebarProjectSort) => {
     onUiPreferencesChange({ sidebarProjectSort: sort });
     closeSectionMenu();
+  };
+
+  const buildProjectOrderWithSection = (sectionProjectIds: string[], nextSectionProjectIds: string[]) => {
+    const allProjectIds = projects.map((project) => project.id);
+    const sectionIdSet = new Set(sectionProjectIds);
+    const knownIdSet = new Set(allProjectIds);
+    const currentOrder = [
+      ...uiPreferences.sidebarProjectOrder.filter((projectId) => knownIdSet.has(projectId)),
+      ...allProjectIds.filter((projectId) => !uiPreferences.sidebarProjectOrder.includes(projectId)),
+    ];
+    const preservedIds = currentOrder.filter((projectId) => !sectionIdSet.has(projectId));
+
+    return [...preservedIds, ...nextSectionProjectIds];
+  };
+
+  const setProjectDragPreviewOrder = (order: string[] | null) => {
+    projectDragPreviewOrderRef.current = order;
+    setProjectDragPreviewOrderState(order);
+  };
+
+  const captureProjectRowRects = (projectIds: string[]) => {
+    const rects = new Map<string, DOMRect>();
+
+    for (const projectId of projectIds) {
+      const element = projectRowRefs.current.get(projectId);
+      if (element) rects.set(projectId, element.getBoundingClientRect());
+    }
+
+    projectAnimationRectsRef.current = rects;
+  };
+
+  const resetProjectPointerDrag = () => {
+    projectPointerDragRef.current = null;
+    setDraggingProjectId(null);
+    setProjectDragPreviewOrder(null);
+  };
+
+  const areProjectOrdersEqual = (a: string[], b: string[]) =>
+    a.length === b.length && a.every((projectId, index) => projectId === b[index]);
+
+  const buildMovedProjectOrder = (
+    draggedProjectId: string,
+    targetProjectId: string,
+    position: ProjectDragPosition,
+    sectionProjectIds: string[],
+  ) => {
+    if (draggedProjectId === targetProjectId) return sectionProjectIds;
+    if (!sectionProjectIds.includes(draggedProjectId) || !sectionProjectIds.includes(targetProjectId)) {
+      return sectionProjectIds;
+    }
+
+    const nextSectionProjectIds = sectionProjectIds.filter((projectId) => projectId !== draggedProjectId);
+    const targetIndex = nextSectionProjectIds.indexOf(targetProjectId);
+    nextSectionProjectIds.splice(position === "after" ? targetIndex + 1 : targetIndex, 0, draggedProjectId);
+
+    return nextSectionProjectIds;
+  };
+
+  const getProjectDragTargetFromPoint = (
+    clientX: number,
+    clientY: number,
+    sectionProjectIds: string[],
+  ): ProjectDragTarget | null => {
+    const targetElement = document.elementFromPoint(clientX, clientY);
+    const projectElement = targetElement?.closest("[data-project-id]");
+
+    if (!(projectElement instanceof HTMLElement)) return null;
+
+    const projectId = projectElement.dataset.projectId;
+    if (!projectId || !sectionProjectIds.includes(projectId)) return null;
+
+    const rect = projectElement.getBoundingClientRect();
+    return {
+      projectId,
+      position: clientY > rect.top + rect.height / 2 ? "after" : "before",
+    };
+  };
+
+  const handleProjectPointerDown = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+    project: AppProject,
+    sectionProjects: AppProject[],
+    isProjectOpen: boolean,
+  ) => {
+    if (event.button !== 0 || isProjectOpen || sectionProjects.length <= 1) return;
+    if (
+      (event.target as HTMLElement).closest(
+        ".left-sidebar__project-icon, .left-sidebar__project-inline-chevron",
+      )
+    ) {
+      return;
+    }
+
+    closeProjectMenu();
+    closeSectionMenu();
+    projectPointerDragRef.current = {
+      hasMoved: false,
+      pointerId: event.pointerId,
+      projectId: project.id,
+      sectionProjectIds: sectionProjects.map((sectionProject) => sectionProject.id),
+      startY: event.clientY,
+    };
+    setProjectDragPreviewOrder(null);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const handleProjectPointerMove = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const dragState = projectPointerDragRef.current;
+    if (!dragState || dragState.pointerId !== event.pointerId) return;
+
+    if (!dragState.hasMoved && Math.abs(event.clientY - dragState.startY) < 5) return;
+
+    dragState.hasMoved = true;
+    suppressProjectClickRef.current = dragState.projectId;
+    setDraggingProjectId(dragState.projectId);
+
+    const currentPreviewOrder = projectDragPreviewOrderRef.current ?? dragState.sectionProjectIds;
+    const nextTarget = getProjectDragTargetFromPoint(
+      event.clientX,
+      event.clientY,
+      currentPreviewOrder,
+    );
+
+    if (nextTarget && nextTarget.projectId !== dragState.projectId) {
+      const nextPreviewOrder = buildMovedProjectOrder(
+        dragState.projectId,
+        nextTarget.projectId,
+        nextTarget.position,
+        currentPreviewOrder,
+      );
+
+      if (!areProjectOrdersEqual(currentPreviewOrder, nextPreviewOrder)) {
+        captureProjectRowRects(currentPreviewOrder);
+        setProjectDragPreviewOrder(nextPreviewOrder);
+      }
+    }
+
+    event.preventDefault();
+  };
+
+  const handleProjectPointerUp = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const dragState = projectPointerDragRef.current;
+    if (!dragState || dragState.pointerId !== event.pointerId) return;
+
+    const finalPreviewOrder = projectDragPreviewOrderRef.current;
+    if (
+      dragState.hasMoved &&
+      finalPreviewOrder &&
+      !areProjectOrdersEqual(dragState.sectionProjectIds, finalPreviewOrder)
+    ) {
+      onUiPreferencesChange({
+        sidebarProjectSort: "manual",
+        sidebarProjectOrder: buildProjectOrderWithSection(dragState.sectionProjectIds, finalPreviewOrder),
+      });
+    }
+
+    resetProjectPointerDrag();
+    window.setTimeout(() => {
+      suppressProjectClickRef.current = null;
+    }, 0);
+  };
+
+  const handleProjectPointerCancel = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const dragState = projectPointerDragRef.current;
+    if (!dragState || dragState.pointerId !== event.pointerId) return;
+
+    resetProjectPointerDrag();
+    window.setTimeout(() => {
+      suppressProjectClickRef.current = null;
+    }, 0);
   };
 
   const isSectionFirst = (scope: SidebarSectionScope) =>
@@ -412,12 +775,17 @@ export function LeftSidebar({
       conversation={conversation}
       key={conversation.id}
       language={language}
+      markUnreadLabel={t("conversation.markUnread")}
       nested={nested}
       now={now}
       onArchiveConversation={onArchiveConversation}
+      onMarkConversationUnread={onMarkConversationUnread}
+      onRenameConversation={startRenamingConversation}
       onSelectConversation={onSelectConversation}
       onTogglePinConversation={onTogglePinConversation}
       pinLabel={t("conversation.pinConversation")}
+      renameLabel={t("conversation.renameConversation")}
+      unreadLabel={t("sidebar.unreadConversation")}
       unpinLabel={t("conversation.unpinConversation")}
       justNow={t("sidebar.justNow")}
     />
@@ -549,45 +917,95 @@ export function LeftSidebar({
     );
   };
 
-  const renderProjectGroup = (project: AppProject, pinnedSection = false) => {
+  const renderProjectGroup = (project: AppProject, pinnedSection = false, sectionProjects: AppProject[]) => {
     const isProjectOpen = openProjectIds.has(project.id);
     const isProjectPinned = Boolean(project.pinnedAt);
     const ProjectIcon = isProjectOpen ? FolderOpen : Folder;
     const projectConversations = conversationsByProjectId[project.id] ?? [];
     const visibleProjectConversationCount = projectConversations.length;
+    const isDragging = draggingProjectId === project.id;
+    const canDragProject = !isProjectOpen && sectionProjects.length > 1;
+    const hasPendingProjectConversation = projectConversations.some((conversation) =>
+      conversation.messages.some((message) => message.role === "assistant" && message.status === "pending"),
+    );
+    const hasUnreadProjectConversation = projectConversations.some(
+      (conversation) => conversation.unreadAt && conversation.id !== activeConversationId,
+    );
+    const shouldShowProjectStatus =
+      !isProjectOpen && (hasPendingProjectConversation || hasUnreadProjectConversation);
 
     return (
       <div
         className={`left-sidebar__project-group${pinnedSection ? " left-sidebar__project-group--pinned" : ""}`}
+        data-dragging={isDragging || undefined}
         key={project.id}
       >
-        <div className="left-sidebar__project-row">
+        <div
+          className="left-sidebar__project-row"
+          data-project-id={project.id}
+          ref={(element) => {
+            if (element) {
+              projectRowRefs.current.set(project.id, element);
+            } else {
+              projectRowRefs.current.delete(project.id);
+            }
+          }}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            closeSectionMenu();
+            setOpenProjectMenuId(project.id);
+          }}
+        >
           <button
             className="left-sidebar__project-main"
             type="button"
-            onClick={() => toggleProject(project.id)}
+            data-draggable={canDragProject || undefined}
+            onClick={(event) => {
+              if (suppressProjectClickRef.current === project.id) {
+                event.preventDefault();
+                return;
+              }
+
+              toggleProject(project.id);
+            }}
+            onPointerCancel={handleProjectPointerCancel}
+            onPointerDown={(event) => handleProjectPointerDown(event, project, sectionProjects, isProjectOpen)}
+            onPointerMove={handleProjectPointerMove}
+            onPointerUp={handleProjectPointerUp}
           >
-            <ProjectIcon aria-hidden="true" />
+            <ProjectIcon className="left-sidebar__project-icon" aria-hidden="true" />
             <span>{project.name}</span>
+            <ChevronDown
+              className="left-sidebar__project-inline-chevron"
+              data-open={isProjectOpen || undefined}
+              aria-hidden="true"
+            />
           </button>
+
+          {shouldShowProjectStatus && (
+            <span className="left-sidebar__project-status">
+              {hasPendingProjectConversation ? (
+                <span className="left-sidebar__conversation-spinner" aria-label="正在处理" />
+              ) : (
+                <span className="left-sidebar__conversation-unread-dot" aria-label={t("sidebar.unreadConversation")} />
+              )}
+            </span>
+          )}
 
           <div className="left-sidebar__project-actions">
             <button
-              className="left-sidebar__project-action"
-              type="button"
-              aria-expanded={isProjectOpen}
-              onClick={() => toggleProject(project.id)}
-            >
-              <ChevronDown data-open={isProjectOpen || undefined} aria-hidden="true" />
-            </button>
-            <button
-              className="left-sidebar__project-action"
+              className="left-sidebar__project-action left-sidebar__project-action--more"
               type="button"
               aria-label={t("project.moreActions")}
-              data-open={openProjectMenuId === project.id || undefined}
+              data-menu-open={openProjectMenuId === project.id || undefined}
               onClick={() => {
                 closeSectionMenu();
-                setOpenProjectMenuId(openProjectMenuId === project.id ? null : project.id);
+                if (openProjectMenuId === project.id) {
+                  closeProjectMenu();
+                  return;
+                }
+
+                setOpenProjectMenuId(project.id);
               }}
             >
               <MoreHorizontal aria-hidden="true" />
@@ -611,7 +1029,7 @@ export function LeftSidebar({
               role="menuitem"
               onClick={() => {
                 onTogglePinProject(project.id);
-                setOpenProjectMenuId(null);
+                closeProjectMenu();
               }}
             >
               <Pin aria-hidden="true" />
@@ -624,7 +1042,7 @@ export function LeftSidebar({
               disabled={!project.path}
               onClick={() => {
                 onShowProjectInFolder(project.id);
-                setOpenProjectMenuId(null);
+                closeProjectMenu();
               }}
             >
               <FolderOpen aria-hidden="true" />
@@ -646,7 +1064,7 @@ export function LeftSidebar({
               disabled={visibleProjectConversationCount === 0}
               onClick={() => {
                 setPendingArchiveProject(project);
-                setOpenProjectMenuId(null);
+                closeProjectMenu();
               }}
             >
               <Archive aria-hidden="true" />
@@ -658,7 +1076,7 @@ export function LeftSidebar({
               role="menuitem"
               onClick={() => {
                 setPendingRemoveProject(project);
-                setOpenProjectMenuId(null);
+                closeProjectMenu();
               }}
             >
               <X aria-hidden="true" />
@@ -710,9 +1128,9 @@ export function LeftSidebar({
 
       {openSectionMenu === "projects" && renderSectionMenu("projects")}
 
-      {areProjectsOpen && regularProjects.length > 0 && (
+      {areProjectsOpen && displayRegularProjects.length > 0 && (
         <div className="left-sidebar__project-list">
-          {regularProjects.map((project) => renderProjectGroup(project))}
+          {displayRegularProjects.map((project) => renderProjectGroup(project, false, displayRegularProjects))}
         </div>
       )}
     </section>
@@ -772,7 +1190,13 @@ export function LeftSidebar({
   );
 
   return (
-    <aside className="left-sidebar" aria-label={t("app.leftSidebar")}>
+    <aside
+      className="left-sidebar"
+      aria-label={t("app.leftSidebar")}
+      onContextMenu={(event) => {
+        if (!event.defaultPrevented) event.preventDefault();
+      }}
+    >
       <button
         className="left-sidebar__primary-action"
         data-active={isNewConversationActive || undefined}
@@ -790,7 +1214,7 @@ export function LeftSidebar({
           </h2>
           <div className="left-sidebar__pinned-list">
             {pinnedRootConversations.map((conversation) => renderConversationRow(conversation))}
-            {pinnedProjects.map((project) => renderProjectGroup(project, true))}
+            {pinnedProjects.map((project) => renderProjectGroup(project, true, []))}
           </div>
         </section>
       )}
@@ -848,6 +1272,50 @@ export function LeftSidebar({
                 className="left-sidebar__dialog-button left-sidebar__dialog-button--primary"
                 type="submit"
                 disabled={!renameValue.trim()}
+              >
+                {t("project.save")}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {renamingConversation && (
+        <div
+          className="left-sidebar__dialog-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.currentTarget === event.target) setRenamingConversation(null);
+          }}
+        >
+          <form className="left-sidebar__dialog" onSubmit={submitRenameConversation}>
+            <button
+              className="left-sidebar__dialog-close"
+              type="button"
+              aria-label={t("project.cancel")}
+              onClick={() => setRenamingConversation(null)}
+            >
+              <X aria-hidden="true" />
+            </button>
+            <h3>{t("conversation.renameTitle")}</h3>
+            <p>{t("conversation.renameDescription")}</p>
+            <input
+              autoFocus
+              value={conversationRenameValue}
+              onChange={(event) => setConversationRenameValue(event.target.value)}
+            />
+            <div className="left-sidebar__dialog-actions">
+              <button
+                className="left-sidebar__dialog-button left-sidebar__dialog-button--secondary"
+                type="button"
+                onClick={() => setRenamingConversation(null)}
+              >
+                {t("project.cancel")}
+              </button>
+              <button
+                className="left-sidebar__dialog-button left-sidebar__dialog-button--primary"
+                type="submit"
+                disabled={!conversationRenameValue.trim()}
               >
                 {t("project.save")}
               </button>

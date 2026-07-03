@@ -1,23 +1,35 @@
 use crate::storage::models::{
-    AppDataSnapshot, ChatConversationRecord, ComposerDraftRecord, ModelSettingsRecord,
-    ProjectRecord, UiPreferencesRecord,
+    AppDataSnapshot, AttachmentRecord, ChatConversationMetaRecord, ChatConversationRecord,
+    ChatMessageAttachmentRecord, ChatMessageRecord, ChatMessageStateRecord, ComposerDraftRecord,
+    ModelSettingsRecord, ProjectRecord, UiPreferencesRecord,
 };
 use crate::storage::{
-    chat_repository, composer_draft_repository, config_repository, now_ms,
+    attachment_repository, chat_repository, composer_draft_repository, config_repository, now_ms,
     preferences_repository, project_repository, storage_error, StorageState,
 };
+use base64::Engine;
+use rusqlite::Connection;
+use std::collections::HashMap;
+use std::fs;
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 
 #[tauri::command]
-pub fn load_app_data(state: State<'_, StorageState>) -> Result<AppDataSnapshot, String> {
+pub fn load_app_data(
+    state: State<'_, StorageState>,
+    app_handle: AppHandle,
+) -> Result<AppDataSnapshot, String> {
     let connection = state.connection()?;
+    let attachment_root = attachment_root(&app_handle)?;
+    let mut conversations = chat_repository::list_conversations(&connection).map_err(storage_error)?;
+    attach_message_attachments(&connection, &attachment_root, &mut conversations)?;
 
     Ok(AppDataSnapshot {
         model_settings: config_repository::load_model_settings(&connection)
             .map_err(storage_error)?,
         projects: project_repository::list_projects(&connection).map_err(storage_error)?,
-        conversations: chat_repository::list_conversations(&connection).map_err(storage_error)?,
+        conversations,
         composer_drafts: composer_draft_repository::list_composer_drafts(&connection)
             .map_err(storage_error)?,
         ui_preferences: preferences_repository::load_ui_preferences(&connection)
@@ -151,9 +163,13 @@ pub fn show_project_in_folder(
 #[tauri::command]
 pub fn load_conversations(
     state: State<'_, StorageState>,
+    app_handle: AppHandle,
 ) -> Result<Vec<ChatConversationRecord>, String> {
     let connection = state.connection()?;
-    chat_repository::list_conversations(&connection).map_err(storage_error)
+    let attachment_root = attachment_root(&app_handle)?;
+    let mut conversations = chat_repository::list_conversations(&connection).map_err(storage_error)?;
+    attach_message_attachments(&connection, &attachment_root, &mut conversations)?;
+    Ok(conversations)
 }
 
 #[tauri::command]
@@ -168,12 +184,47 @@ pub fn save_conversation(
 }
 
 #[tauri::command]
+pub fn save_conversation_meta(
+    state: State<'_, StorageState>,
+    conversation: ChatConversationMetaRecord,
+) -> Result<ChatConversationMetaRecord, String> {
+    let connection = state.connection()?;
+    chat_repository::save_conversation_meta(&connection, &conversation)
+        .map_err(storage_error)?;
+    Ok(conversation)
+}
+
+#[tauri::command]
+pub fn upsert_chat_messages(
+    state: State<'_, StorageState>,
+    conversation_id: String,
+    messages: Vec<ChatMessageRecord>,
+    position_offset: i64,
+) -> Result<Vec<ChatMessageRecord>, String> {
+    let mut connection = state.connection()?;
+    chat_repository::upsert_messages(&mut connection, &conversation_id, &messages, position_offset)
+        .map_err(storage_error)?;
+    Ok(messages)
+}
+
+#[tauri::command]
 pub fn delete_conversation(
     state: State<'_, StorageState>,
     conversation_id: String,
 ) -> Result<(), String> {
     let connection = state.connection()?;
     chat_repository::delete_conversation(&connection, &conversation_id).map_err(storage_error)
+}
+
+#[tauri::command]
+pub fn save_chat_message_state(
+    state: State<'_, StorageState>,
+    conversation_id: String,
+    message: ChatMessageStateRecord,
+) -> Result<(), String> {
+    let connection = state.connection()?;
+    chat_repository::update_message_state(&connection, &conversation_id, &message)
+        .map_err(storage_error)
 }
 
 #[tauri::command]
@@ -217,6 +268,105 @@ pub fn save_ui_preferences(
 ) -> Result<UiPreferencesRecord, String> {
     let connection = state.connection()?;
     preferences_repository::save_ui_preferences(&connection, preferences).map_err(storage_error)
+}
+
+fn attachment_root(app_handle: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("获取应用数据目录失败：{error}"))?
+        .join("attachments"))
+}
+
+fn attach_message_attachments(
+    connection: &Connection,
+    attachment_root: &Path,
+    conversations: &mut [ChatConversationRecord],
+) -> Result<(), String> {
+    for conversation in conversations {
+        let attachments = attachment_repository::list_conversation_attachments(
+            connection,
+            &conversation.id,
+        )
+        .map_err(storage_error)?;
+        if attachments.is_empty() {
+            continue;
+        }
+
+        let mut attachments_by_message_id: HashMap<String, Vec<ChatMessageAttachmentRecord>> =
+            HashMap::new();
+        for attachment in attachments {
+            attachments_by_message_id
+                .entry(attachment.message_id.clone())
+                .or_default()
+                .push(chat_message_attachment_record(attachment_root, attachment));
+        }
+
+        for message in &mut conversation.messages {
+            if let Some(attachments) = attachments_by_message_id.remove(&message.id) {
+                message.attachments = attachments;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn chat_message_attachment_record(
+    attachment_root: &Path,
+    attachment: AttachmentRecord,
+) -> ChatMessageAttachmentRecord {
+    let preview_mime_type = image_preview_mime_type(&attachment);
+    let preview_data = preview_mime_type
+        .as_ref()
+        .and_then(|_| read_attachment_preview_data(attachment_root, &attachment));
+
+    ChatMessageAttachmentRecord {
+        id: attachment.id,
+        kind: attachment.kind,
+        name: attachment.original_name,
+        mime_type: attachment.mime_type,
+        size_bytes: attachment.size_bytes,
+        preview_data,
+        preview_mime_type,
+        created_at: attachment.created_at,
+    }
+}
+
+fn image_preview_mime_type(attachment: &AttachmentRecord) -> Option<String> {
+    if attachment.kind != "image" {
+        return None;
+    }
+
+    attachment
+        .mime_type
+        .as_deref()
+        .filter(|mime_type| mime_type.starts_with("image/"))
+        .map(ToString::to_string)
+}
+
+fn read_attachment_preview_data(
+    attachment_root: &Path,
+    attachment: &AttachmentRecord,
+) -> Option<String> {
+    let storage_path = safe_attachment_storage_path(attachment_root, &attachment.storage_rel_path)?;
+    let bytes = fs::read(storage_path).ok()?;
+    Some(base64::engine::general_purpose::STANDARD.encode(bytes))
+}
+
+fn safe_attachment_storage_path(attachment_root: &Path, storage_rel_path: &str) -> Option<PathBuf> {
+    let relative_path = Path::new(storage_rel_path);
+    if relative_path.is_absolute() {
+        return None;
+    }
+    if relative_path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir | Component::Prefix(_)))
+    {
+        return None;
+    }
+
+    Some(attachment_root.join(relative_path))
 }
 
 fn create_project_id(name: &str) -> String {

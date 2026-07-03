@@ -4,9 +4,8 @@ import {
   ArrowUp,
   Check,
   ChevronDown,
-  FileText,
+  Folder,
   ImageIcon,
-  NotebookText,
   Paperclip,
   Plus,
   Search,
@@ -27,6 +26,12 @@ import {
   selectComposerAttachments,
 } from "../chatAttachments";
 import type { ComposerAttachment, ComposerAttachmentKind } from "../chatAttachments";
+import {
+  getAttachmentBadgeLabel,
+  getAttachmentExtension,
+  getAttachmentIcon,
+  getAttachmentTypeLabel,
+} from "../attachmentDisplay";
 import type { ChatComposerDraft, ChatPermissionMode, ChatSubmitOptions } from "../chatTypes";
 import "./ChatComposer.css";
 
@@ -258,6 +263,52 @@ export function ChatComposer({
         void addDroppedOrPastedFiles(event.clipboardData.files);
       }}
     >
+      {attachments.length > 0 && (
+        <div className="chat-composer__attachments" aria-label={t("chat.attachments")}>
+          {attachments.map((attachment) => {
+            const extension = getAttachmentExtension(attachment.name);
+            const AttachmentIcon = getAttachmentIcon(attachment.kind, extension);
+            const badgeLabel = getAttachmentBadgeLabel(extension);
+            const typeLabel = getAttachmentTypeLabel(attachment);
+            const isImagePreview = attachment.kind === "image" && Boolean(attachment.previewUrl);
+
+            return (
+              <div className="composer-attachment" data-kind={attachment.kind} key={attachment.id}>
+                {isImagePreview ? (
+                  <img
+                    className="composer-attachment__thumbnail"
+                    src={attachment.previewUrl}
+                    alt={attachment.name}
+                  />
+                ) : (
+                  <>
+                    <div className="composer-attachment__icon" aria-hidden="true">
+                      {badgeLabel ? (
+                        <span className="composer-attachment__language-badge">{badgeLabel}</span>
+                      ) : (
+                        <AttachmentIcon />
+                      )}
+                    </div>
+                    <div className="composer-attachment__details">
+                      <span className="composer-attachment__name">{attachment.name}</span>
+                      <span className="composer-attachment__type">{typeLabel}</span>
+                    </div>
+                  </>
+                )}
+                <button
+                  type="button"
+                  className="composer-attachment__remove"
+                  aria-label={`${t("chat.removeAttachment")} ${attachment.name}`}
+                  onClick={() => removeAttachment(attachment.id)}
+                >
+                  <X aria-hidden="true" />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       <textarea
         ref={textareaRef}
         value={message}
@@ -274,28 +325,6 @@ export function ChatComposer({
           }
         }}
       />
-
-      {attachments.length > 0 && (
-        <div className="chat-composer__attachments" aria-label={t("chat.attachments")}>
-          {attachments.map((attachment) => (
-            <div className="composer-attachment" data-kind={attachment.kind} key={attachment.id}>
-              {attachment.previewUrl ? (
-                <img src={attachment.previewUrl} alt="" />
-              ) : (
-                <FileText aria-hidden="true" />
-              )}
-              <span>{attachment.name}</span>
-              <button
-                type="button"
-                aria-label={`${t("chat.removeAttachment")} ${attachment.name}`}
-                onClick={() => removeAttachment(attachment.id)}
-              >
-                <X aria-hidden="true" />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
 
       {hasUnsupportedImageAttachment && (
         <p className="chat-composer__warning">{t("chat.unsupportedImageWarning")}</p>
@@ -477,7 +506,7 @@ export function ChatComposer({
                 setIsProjectMenuOpen((open) => !open);
               }}
             >
-              <NotebookText aria-hidden="true" />
+              <Folder aria-hidden="true" />
               <span>{selectedProject?.name ?? t("project.chooseProject")}</span>
             </button>
 
@@ -510,7 +539,7 @@ export function ChatComposer({
                           setIsProjectMenuOpen(false);
                         }}
                       >
-                        <NotebookText aria-hidden="true" />
+                        <Folder aria-hidden="true" />
                         <span>{project.name}</span>
                         {isSelected && <Check aria-hidden="true" />}
                       </button>
@@ -529,7 +558,6 @@ export function ChatComposer({
                 >
                   <Plus aria-hidden="true" />
                   <span>{t("project.newProject")}</span>
-                  <ChevronDown aria-hidden="true" />
                 </button>
 
                 <button

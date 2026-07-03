@@ -1,4 +1,6 @@
-use crate::storage::models::{ChatConversationRecord, ChatMessageRecord};
+use crate::storage::models::{
+    ChatConversationMetaRecord, ChatConversationRecord, ChatMessageRecord, ChatMessageStateRecord,
+};
 use rusqlite::{params, Connection, OptionalExtension};
 
 pub fn list_conversations(
@@ -6,7 +8,7 @@ pub fn list_conversations(
 ) -> rusqlite::Result<Vec<ChatConversationRecord>> {
     let mut conversation_statement = connection.prepare(
         "
-        SELECT id, project_id, model_id, title, created_at, updated_at, pinned_at, archived_at
+        SELECT id, project_id, model_id, title, created_at, updated_at, pinned_at, archived_at, unread_at
         FROM conversations
         ORDER BY
             CASE WHEN pinned_at IS NULL THEN 1 ELSE 0 END ASC,
@@ -27,6 +29,7 @@ pub fn list_conversations(
                 updated_at: row.get(5)?,
                 pinned_at: row.get(6)?,
                 archived_at: row.get(7)?,
+                unread_at: row.get(8)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -45,7 +48,7 @@ pub fn get_conversation(
     let conversation = connection
         .query_row(
             "
-            SELECT id, project_id, model_id, title, created_at, updated_at, pinned_at, archived_at
+            SELECT id, project_id, model_id, title, created_at, updated_at, pinned_at, archived_at, unread_at
             FROM conversations
             WHERE id = ?1
             ",
@@ -61,6 +64,7 @@ pub fn get_conversation(
                     updated_at: row.get(5)?,
                     pinned_at: row.get(6)?,
                     archived_at: row.get(7)?,
+                    unread_at: row.get(8)?,
                 })
             },
         )
@@ -90,16 +94,18 @@ pub fn save_conversation(
             created_at,
             updated_at,
             pinned_at,
-            archived_at
+            archived_at,
+            unread_at
         )
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
         ON CONFLICT(id) DO UPDATE SET
             project_id = excluded.project_id,
             model_id = excluded.model_id,
             title = excluded.title,
             updated_at = excluded.updated_at,
             pinned_at = excluded.pinned_at,
-            archived_at = excluded.archived_at
+            archived_at = excluded.archived_at,
+            unread_at = excluded.unread_at
         ",
         params![
             &conversation.id,
@@ -109,7 +115,8 @@ pub fn save_conversation(
             conversation.created_at,
             conversation.updated_at,
             conversation.pinned_at,
-            conversation.archived_at
+            conversation.archived_at,
+            conversation.unread_at
         ],
     )?;
 
@@ -127,10 +134,12 @@ pub fn save_conversation(
                 role,
                 content,
                 status,
+                agent_run_json,
+                ui_state_json,
                 created_at,
                 position
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
             ",
             params![
                 &message.id,
@@ -138,8 +147,101 @@ pub fn save_conversation(
                 &message.role,
                 &message.content,
                 &message.status,
+                &message.agent_run_json,
+                &message.ui_state_json,
                 message.created_at,
                 index as i64
+            ],
+        )?;
+    }
+
+    transaction.commit()
+}
+
+pub fn save_conversation_meta(
+    connection: &Connection,
+    conversation: &ChatConversationMetaRecord,
+) -> rusqlite::Result<()> {
+    connection.execute(
+        "
+        INSERT INTO conversations (
+            id,
+            project_id,
+            model_id,
+            title,
+            created_at,
+            updated_at,
+            pinned_at,
+            archived_at,
+            unread_at
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+        ON CONFLICT(id) DO UPDATE SET
+            project_id = excluded.project_id,
+            model_id = excluded.model_id,
+            title = excluded.title,
+            updated_at = excluded.updated_at,
+            pinned_at = excluded.pinned_at,
+            archived_at = excluded.archived_at,
+            unread_at = excluded.unread_at
+        ",
+        params![
+            &conversation.id,
+            &conversation.project_id,
+            &conversation.model_id,
+            &conversation.title,
+            conversation.created_at,
+            conversation.updated_at,
+            conversation.pinned_at,
+            conversation.archived_at,
+            conversation.unread_at
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn upsert_messages(
+    connection: &mut Connection,
+    conversation_id: &str,
+    messages: &[ChatMessageRecord],
+    position_offset: i64,
+) -> rusqlite::Result<()> {
+    let transaction = connection.transaction()?;
+
+    for (index, message) in messages.iter().enumerate() {
+        transaction.execute(
+            "
+            INSERT INTO messages (
+                id,
+                conversation_id,
+                role,
+                content,
+                status,
+                agent_run_json,
+                ui_state_json,
+                created_at,
+                position
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            ON CONFLICT(id) DO UPDATE SET
+                role = excluded.role,
+                content = excluded.content,
+                status = excluded.status,
+                agent_run_json = excluded.agent_run_json,
+                ui_state_json = excluded.ui_state_json,
+                created_at = excluded.created_at,
+                position = excluded.position
+            ",
+            params![
+                &message.id,
+                conversation_id,
+                &message.role,
+                &message.content,
+                &message.status,
+                &message.agent_run_json,
+                &message.ui_state_json,
+                message.created_at,
+                position_offset + index as i64
             ],
         )?;
     }
@@ -182,13 +284,40 @@ pub fn update_message_status_and_content(
     Ok(())
 }
 
+pub fn update_message_state(
+    connection: &Connection,
+    conversation_id: &str,
+    message: &ChatMessageStateRecord,
+) -> rusqlite::Result<()> {
+    connection.execute(
+        "
+        UPDATE messages
+        SET
+            content = ?1,
+            status = ?2,
+            agent_run_json = ?3,
+            ui_state_json = ?4
+        WHERE conversation_id = ?5 AND id = ?6
+        ",
+        params![
+            &message.content,
+            &message.status,
+            &message.agent_run_json,
+            &message.ui_state_json,
+            conversation_id,
+            &message.id
+        ],
+    )?;
+    Ok(())
+}
+
 fn list_messages(
     connection: &Connection,
     conversation_id: &str,
 ) -> rusqlite::Result<Vec<ChatMessageRecord>> {
     let mut statement = connection.prepare(
         "
-        SELECT id, role, content, created_at, status
+        SELECT id, role, content, created_at, status, agent_run_json, ui_state_json
         FROM messages
         WHERE conversation_id = ?1
         ORDER BY position ASC, created_at ASC
@@ -203,6 +332,9 @@ fn list_messages(
                 content: row.get(2)?,
                 created_at: row.get(3)?,
                 status: row.get(4)?,
+                attachments: Vec::new(),
+                agent_run_json: row.get(5)?,
+                ui_state_json: row.get(6)?,
             })
         })?
         .collect();

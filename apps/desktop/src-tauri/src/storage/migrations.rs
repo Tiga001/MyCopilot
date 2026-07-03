@@ -64,7 +64,8 @@ pub fn run_migrations(connection: &Connection) -> rusqlite::Result<()> {
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
             pinned_at INTEGER,
-            archived_at INTEGER
+            archived_at INTEGER,
+            unread_at INTEGER
         );
 
         CREATE TABLE IF NOT EXISTS attachments (
@@ -104,6 +105,13 @@ pub fn run_migrations(connection: &Connection) -> rusqlite::Result<()> {
     add_column_if_missing(connection, "projects", "pinned_at", "INTEGER")?;
     add_column_if_missing(connection, "conversations", "pinned_at", "INTEGER")?;
     add_column_if_missing(connection, "conversations", "archived_at", "INTEGER")?;
+    add_column_if_missing(connection, "conversations", "unread_at", "INTEGER")?;
+    add_column_if_missing(
+        connection,
+        "ui_preferences",
+        "sidebar_project_order_json",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )?;
 
     connection.execute_batch(
         "
@@ -113,6 +121,8 @@ pub fn run_migrations(connection: &Connection) -> rusqlite::Result<()> {
             role TEXT NOT NULL,
             content TEXT NOT NULL,
             status TEXT,
+            agent_run_json TEXT,
+            ui_state_json TEXT,
             created_at INTEGER NOT NULL,
             position INTEGER NOT NULL,
             FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
@@ -123,6 +133,7 @@ pub fn run_migrations(connection: &Connection) -> rusqlite::Result<()> {
         CREATE INDEX IF NOT EXISTS idx_conversations_project_id ON conversations(project_id);
         CREATE INDEX IF NOT EXISTS idx_conversations_pinned_at ON conversations(pinned_at);
         CREATE INDEX IF NOT EXISTS idx_conversations_archived_at ON conversations(archived_at);
+        CREATE INDEX IF NOT EXISTS idx_conversations_unread_at ON conversations(unread_at);
         CREATE INDEX IF NOT EXISTS idx_conversations_updated_at ON conversations(updated_at);
         CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation_id, position);
         CREATE INDEX IF NOT EXISTS idx_attachments_conversation_id ON attachments(conversation_id, created_at);
@@ -130,5 +141,10 @@ pub fn run_migrations(connection: &Connection) -> rusqlite::Result<()> {
         CREATE INDEX IF NOT EXISTS idx_attachments_message_id ON attachments(message_id);
         CREATE INDEX IF NOT EXISTS idx_composer_drafts_updated_at ON composer_drafts(updated_at);
         ",
-    )
+    )?;
+
+    add_column_if_missing(connection, "messages", "agent_run_json", "TEXT")?;
+    add_column_if_missing(connection, "messages", "ui_state_json", "TEXT")?;
+
+    Ok(())
 }

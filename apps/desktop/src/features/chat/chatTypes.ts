@@ -29,6 +29,10 @@ export type ChatAgentTimelineItem =
 export interface ChatAgentRunView {
   runId: string | null;
   status: AgentRunStatus | "starting";
+  startedAt?: number;
+  firstResponseAt?: number;
+  lastResponseAt?: number;
+  completedAt?: number;
   toolDefinitions: AgentToolDefinition[];
   toolCalls: AgentToolCall[];
   toolResults: AgentToolResult[];
@@ -42,13 +46,32 @@ export interface ChatAgentRunView {
   finishReason?: string;
 }
 
+export interface ChatMessageUiState {
+  timelineCollapsed?: boolean;
+}
+
+export interface ChatMessageAttachment {
+  id: string;
+  kind: "file" | "image";
+  name: string;
+  mimeType?: string | null;
+  sizeBytes: number;
+  encoding?: AgentInputAttachment["encoding"];
+  data?: string;
+  previewData?: string | null;
+  previewMimeType?: string | null;
+  createdAt?: number;
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
   createdAt: number;
   status?: "pending" | "sent" | "error";
+  attachments?: ChatMessageAttachment[];
   agentRun?: ChatAgentRunView;
+  uiState?: ChatMessageUiState;
 }
 
 export type ChatPermissionMode = "default" | "full";
@@ -79,4 +102,5 @@ export interface ChatConversation {
   updatedAt: number;
   pinnedAt?: number | null;
   archivedAt?: number | null;
+  unreadAt?: number | null;
 }

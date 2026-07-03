@@ -1,4 +1,5 @@
 import { useFrontendConfig } from "../../config/FrontendConfigProvider";
+import { useProjectSettings } from "../../config/ProjectSettingsProvider";
 import { ChatComposer } from "./components/ChatComposer";
 import type { ChatComposerDraft, ChatSubmitOptions } from "./chatTypes";
 import "./NewConversationPage.css";
@@ -17,11 +18,17 @@ export function NewConversationPage({
   onSubmitMessage,
 }: NewConversationPageProps) {
   const { t } = useFrontendConfig();
+  const { projects } = useProjectSettings();
+  const selectedProjectId = draft.projectId ?? defaultProjectId;
+  const selectedProject = projects.find((project) => project.id === selectedProjectId);
+  const title = selectedProject
+    ? t("chat.projectTitle").replace("{projectName}", selectedProject.name)
+    : t("chat.title");
 
   return (
     <section className="new-conversation-page" aria-label={t("chat.newConversation")}>
       <div className="new-conversation-page__content">
-        <h1>{t("chat.title")}</h1>
+        <h1>{title}</h1>
         <ChatComposer
           defaultProjectId={defaultProjectId}
           draft={draft}

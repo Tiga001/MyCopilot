@@ -13,6 +13,7 @@ interface ChatConversationPageProps {
   onRejectAgentAction?: (messageId: string, action: AgentProposedAction) => void;
   onStopGenerating?: () => void;
   onSubmitMessage: (message: string, options: ChatSubmitOptions) => void;
+  onMessageUiStateChange?: (messageId: string, uiState: ChatConversation["messages"][number]["uiState"]) => void;
 }
 
 export function ChatConversationPage({
@@ -24,21 +25,27 @@ export function ChatConversationPage({
   onRejectAgentAction,
   onStopGenerating,
   onSubmitMessage,
+  onMessageUiStateChange,
 }: ChatConversationPageProps) {
   const isGenerating = conversation.messages.some(
     (message) => message.role === "assistant" && message.status === "pending",
   );
+  const lastAssistantMessageId = [...conversation.messages]
+    .reverse()
+    .find((message) => message.role === "assistant")?.id;
 
   return (
     <section className="chat-conversation-page" aria-label={conversation.title}>
       <div className="chat-conversation-page__messages">
         {conversation.messages.map((message) => (
           <ChatMessageItem
+            isLastAssistantMessage={message.id === lastAssistantMessageId}
             key={message.id}
             message={message}
             onApprove={onApproveAgentAction}
             onCancel={onCancelAgentAction}
             onReject={onRejectAgentAction}
+            onUiStateChange={onMessageUiStateChange}
           />
         ))}
       </div>

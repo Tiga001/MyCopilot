@@ -77,11 +77,14 @@ button {
 }
 
 .side-panel--left {
+  z-index: 50;
+  overflow: visible;
   background: var(--left-panel);
   border-right: 1px solid var(--hairline);
 }
 
 .side-panel--right {
+  z-index: 10;
   background: var(--right-panel);
   border-left: 1px solid var(--hairline);
 }
@@ -132,12 +135,6 @@ button {
   -webkit-app-region: no-drag;
 }
 
-.panel-toggle svg {
-  width: 18px;
-  height: 18px;
-  stroke-width: var(--mc-icon-stroke-thin);
-}
-
 .panel-toggle:hover {
   color: var(--mc-color-icon-default);
   background: var(--mc-color-state-hover);
@@ -158,6 +155,59 @@ button {
 
 .app-shell[data-left-open="false"] .panel-toggle--left {
   left: 84px;
+}
+
+.panel-toggle__icon {
+  --panel-toggle-icon-width: 18px;
+  --panel-toggle-icon-height: 15px;
+  --panel-toggle-divider-edge-offset: 3px;
+  --panel-toggle-divider-x: 50%;
+  --panel-toggle-divider-height: calc(var(--panel-toggle-icon-height) - 4px);
+  position: relative;
+  display: block;
+  width: var(--panel-toggle-icon-width);
+  height: var(--panel-toggle-icon-height);
+  color: currentColor;
+  border: 1.5px solid currentColor;
+  border-radius: calc(var(--panel-toggle-icon-height) * 0.28);
+}
+
+.panel-toggle__icon::after {
+  position: absolute;
+  top: 50%;
+  left: var(--panel-toggle-divider-x);
+  width: 1.5px;
+  height: var(--panel-toggle-divider-height);
+  content: "";
+  background: currentColor;
+  border-radius: var(--mc-radius-pill);
+  transform: translate(-50%, -50%);
+  transition:
+    left 140ms ease,
+    height 140ms ease;
+}
+
+.panel-toggle__icon[data-open="true"][data-side="left"] {
+  --panel-toggle-divider-x: var(--panel-toggle-divider-edge-offset);
+  --panel-toggle-divider-height: calc(var(--panel-toggle-icon-height) - 5.5px);
+}
+
+.panel-toggle__icon[data-open="true"][data-side="right"] {
+  --panel-toggle-divider-x: calc(100% - var(--panel-toggle-divider-edge-offset));
+  --panel-toggle-divider-height: calc(var(--panel-toggle-icon-height) - 5.5px);
+}
+
+.panel-toggle__icon[data-open="false"] {
+  --panel-toggle-divider-x: 50%;
+  --panel-toggle-divider-height: calc(var(--panel-toggle-icon-height) - 4px);
+}
+
+.panel-toggle__icon[data-open="false"][data-side="left"] {
+  --panel-toggle-divider-x: 35%;
+}
+
+.panel-toggle__icon[data-open="false"][data-side="right"] {
+  --panel-toggle-divider-x: 65%;
 }
 
 .main-panel__title {

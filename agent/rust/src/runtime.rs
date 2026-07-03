@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const DEFAULT_MAX_TOKENS: u32 = 1024;
+const DEFAULT_MAX_TOKENS: u32 = 30_000;
 const MAX_MAX_TOKENS: u32 = 128_000;
 const DEFAULT_TEMPERATURE: f32 = 0.6;
 const MAX_TOOL_ITERATIONS: usize = 20;

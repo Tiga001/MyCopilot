@@ -8,7 +8,7 @@
   color: var(--mc-color-text-strong);
   font-size: var(--mc-font-size-configuration-title);
   font-weight: var(--mc-font-weight-display);
-  letter-spacing: -0.03em;
+  letter-spacing: 0;
   line-height: var(--mc-line-height-compact);
 }
 
@@ -21,6 +21,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 24px;
+  flex-wrap: wrap;
 }
 
 .environment-projects__header h2 {
@@ -32,6 +33,7 @@
 }
 
 .environment-projects__add-button {
+  flex: 0 0 auto;
   height: 46px;
   padding: 0 18px;
   color: var(--mc-color-text-primary);
@@ -39,7 +41,7 @@
   border: 0;
   border-radius: var(--mc-radius-row);
   font: inherit;
-  font-size: var(--mc-font-size-xl);
+  font-size: var(--mc-font-size-settings-nav);
   font-weight: var(--mc-font-weight-black);
   cursor: pointer;
 }
@@ -78,23 +80,31 @@
 }
 
 .environment-project-card > svg {
-  width: 22px;
-  height: 22px;
+  width: var(--mc-icon-size-3xl);
+  height: var(--mc-icon-size-3xl);
   color: var(--mc-color-icon-muted);
   stroke-width: var(--mc-icon-stroke-regular);
 }
 
 .environment-project-card__name {
+  min-width: 0;
+  overflow: hidden;
   color: var(--mc-color-text-strong);
-  font-size: var(--mc-font-size-2xl);
+  font-size: var(--mc-font-size-settings-section-title);
   font-weight: var(--mc-font-weight-semibold);
   line-height: var(--mc-line-height-normal);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .environment-project-card__detail {
+  min-width: 0;
+  overflow: hidden;
   color: var(--mc-color-text-muted);
-  font-size: var(--mc-font-size-xl);
+  font-size: var(--mc-font-size-settings-body);
   line-height: var(--mc-line-height-normal);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .environment-project-card__delete {
@@ -111,8 +121,8 @@
 }
 
 .environment-project-card__delete svg {
-  width: 19px;
-  height: 19px;
+  width: var(--mc-icon-size-lg);
+  height: var(--mc-icon-size-lg);
   stroke-width: var(--mc-icon-stroke-strong);
 }
 
@@ -162,14 +172,14 @@
   color: var(--mc-color-text-strong);
   font-size: var(--mc-font-size-dialog-title-large);
   font-weight: var(--mc-font-weight-display);
-  letter-spacing: -0.03em;
+  letter-spacing: 0;
   line-height: var(--mc-line-height-compact);
 }
 
 .environment-remove-dialog p {
   margin: 18px 0 0;
   color: var(--mc-color-text-muted);
-  font-size: var(--mc-font-size-3xl);
+  font-size: var(--mc-font-size-settings-body);
   font-weight: var(--mc-font-weight-bold);
   line-height: var(--mc-line-height-dialog-body);
 }
@@ -179,6 +189,7 @@
   justify-content: flex-end;
   margin-top: 30px;
   gap: 22px;
+  flex-wrap: wrap;
 }
 
 .environment-remove-dialog__cancel,
@@ -189,7 +200,7 @@
   border: 0;
   border-radius: var(--mc-radius-card);
   font: inherit;
-  font-size: var(--mc-font-size-2xl);
+  font-size: var(--mc-font-size-settings-nav);
   font-weight: var(--mc-font-weight-display);
   cursor: pointer;
 }
@@ -214,4 +225,20 @@
 .environment-remove-dialog__confirm:focus-visible {
   outline: 2px solid var(--mc-color-focus-ring);
   outline-offset: 2px;
+}
+
+@media (max-width: 720px) {
+  .environment-projects {
+    margin-top: 72px;
+  }
+
+  .environment-project-card {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    padding: 14px 14px 14px 16px;
+    gap: 8px 12px;
+  }
+
+  .environment-project-card__detail {
+    grid-column: 2 / 3;
+  }
 }

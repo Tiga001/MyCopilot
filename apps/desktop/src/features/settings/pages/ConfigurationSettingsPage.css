@@ -16,7 +16,7 @@
   color: var(--mc-color-text-strong);
   font-size: var(--mc-font-size-configuration-title);
   font-weight: var(--mc-font-weight-display);
-  letter-spacing: -0.03em;
+  letter-spacing: 0;
   line-height: var(--mc-line-height-compact);
 }
 
@@ -87,6 +87,7 @@
   justify-content: space-between;
   margin-top: 46px;
   gap: 18px;
+  flex-wrap: wrap;
 }
 
 .available-model-list {
@@ -105,7 +106,7 @@
   min-height: 58px;
   gap: 16px;
   color: var(--mc-color-text-secondary);
-  font-size: var(--mc-font-size-configuration-heading);
+  font-size: var(--mc-font-size-configuration-table);
   cursor: pointer;
 }
 
@@ -132,8 +133,8 @@
 }
 
 .available-model-row__check svg {
-  width: 18px;
-  height: 18px;
+  width: var(--mc-icon-size-base);
+  height: var(--mc-icon-size-base);
   stroke-width: var(--mc-icon-stroke-ultra);
 }
 
@@ -154,7 +155,7 @@
   color: var(--mc-color-text-muted);
   background: var(--mc-color-surface-neutral-subtle);
   border-radius: var(--mc-radius-pill);
-  font-size: var(--mc-font-size-base);
+  font-size: var(--mc-font-size-configuration-control);
   font-weight: var(--mc-font-weight-heavy);
 }
 
@@ -175,14 +176,24 @@
   align-items: center;
   justify-content: center;
   min-width: 104px;
+  max-width: 100%;
   height: 46px;
   padding: 0 22px;
   gap: 8px;
   border-radius: var(--mc-radius-2xl);
   font: inherit;
-  font-size: var(--mc-font-size-lg);
+  font-size: var(--mc-font-size-configuration-control);
   font-weight: var(--mc-font-weight-black);
   cursor: pointer;
+}
+
+.secondary-settings-button span,
+.primary-settings-button span,
+.danger-settings-button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .secondary-settings-button {
@@ -245,12 +256,13 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 28px;
+  flex-wrap: wrap;
 }
 
 .model-manager-page__header p {
   margin: 26px 0 0;
   color: var(--mc-color-text-muted);
-  font-size: var(--mc-font-size-xl);
+  font-size: var(--mc-font-size-settings-body);
   line-height: var(--mc-line-height-relaxed);
 }
 
@@ -271,7 +283,7 @@
 .model-manager-table__row--head {
   min-height: 40px;
   color: var(--mc-color-text-muted);
-  font-size: var(--mc-font-size-base);
+  font-size: var(--mc-font-size-configuration-label);
   font-weight: var(--mc-font-weight-display);
 }
 
@@ -294,7 +306,7 @@
 .model-manager-table__model small {
   overflow: hidden;
   color: var(--mc-color-text-muted);
-  font-size: var(--mc-font-size-base);
+  font-size: var(--mc-font-size-settings-body);
   line-height: var(--mc-line-height-metadata);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -312,14 +324,16 @@
   align-items: center;
   justify-content: flex-end;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 .delete-confirmation {
   display: inline-flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
   color: var(--mc-color-text-danger);
-  font-size: var(--mc-font-size-md);
+  font-size: var(--mc-font-size-configuration-label);
   font-weight: var(--mc-font-weight-black);
 }
 
@@ -328,7 +342,7 @@
   min-width: 76px;
   height: 38px;
   padding: 0 14px;
-  font-size: var(--mc-font-size-md);
+  font-size: var(--mc-font-size-configuration-label);
 }
 
 .model-manager-page__footer {
@@ -357,14 +371,14 @@
   margin-top: 20px;
   gap: 10px;
   color: var(--mc-color-text-secondary);
-  font-size: var(--mc-font-size-xl);
+  font-size: var(--mc-font-size-configuration-label);
   font-weight: var(--mc-font-weight-bold);
   cursor: pointer;
 }
 
 .model-form-page__checkbox input {
-  width: 22px;
-  height: 22px;
+  width: var(--mc-icon-size-3xl);
+  height: var(--mc-icon-size-3xl);
   accent-color: var(--mc-color-button-primary-bg);
 }
 
@@ -373,6 +387,7 @@
   justify-content: flex-end;
   margin-top: 30px;
   gap: 16px;
+  flex-wrap: wrap;
 }
 
 @media (max-width: 1180px) {
@@ -393,5 +408,34 @@
   .model-form-page__price-grid {
     grid-template-columns: 1fr;
     gap: 0;
+  }
+}
+
+@media (max-width: 720px) {
+  .configuration-section + .configuration-section {
+    margin-top: 48px;
+  }
+
+  .configuration-field input,
+  .configuration-field select {
+    height: 52px;
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .available-model-list {
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .available-model-row {
+    grid-template-columns: 30px minmax(0, 1fr);
+    padding: 10px 0;
+    gap: 8px 14px;
+  }
+
+  .model-capability-pill {
+    grid-column: 2 / 3;
+    justify-self: start;
   }
 }

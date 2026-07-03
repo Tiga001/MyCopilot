@@ -2,7 +2,14 @@ import { invoke } from "@tauri-apps/api/core";
 import type { AgentInputAttachment } from "@agent";
 import type { ModelConfig, SearchMode } from "../../config/modelConfig";
 import type { AppProject } from "../../config/projectConfig";
-import type { ChatComposerDraft, ChatConversation, ChatMessage } from "../chat/chatTypes";
+import type {
+  ChatAgentRunView,
+  ChatComposerDraft,
+  ChatConversation,
+  ChatMessage,
+  ChatMessageAttachment,
+  ChatMessageUiState,
+} from "../chat/chatTypes";
 
 interface PersistedModelConfig {
   id: string;
@@ -45,7 +52,15 @@ interface PersistedChatMessage {
   content: string;
   createdAt: number;
   status: ChatMessage["status"] | null;
+  attachments?: ChatMessageAttachment[] | null;
+  agentRunJson: string | null;
+  uiStateJson: string | null;
 }
+
+type PersistedChatMessageState = Pick<
+  PersistedChatMessage,
+  "id" | "content" | "status" | "agentRunJson" | "uiStateJson"
+>;
 
 interface PersistedChatConversation {
   id: string;
@@ -57,7 +72,10 @@ interface PersistedChatConversation {
   updatedAt: number;
   pinnedAt: number | null;
   archivedAt: number | null;
+  unreadAt: number | null;
 }
+
+type PersistedChatConversationMeta = Omit<PersistedChatConversation, "messages">;
 
 interface PersistedComposerDraft {
   scopeId: string;
@@ -70,12 +88,13 @@ interface PersistedComposerDraft {
 }
 
 export type SidebarConversationSort = "created" | "updated";
-export type SidebarProjectSort = "created" | "recent";
+export type SidebarProjectSort = "created" | "recent" | "manual";
 export type SidebarSectionOrder = "projects_first" | "conversations_first";
 
 export interface UiPreferencesSnapshot {
   sidebarConversationSort: SidebarConversationSort;
   sidebarProjectSort: SidebarProjectSort;
+  sidebarProjectOrder: string[];
   sidebarSectionOrder: SidebarSectionOrder;
   updatedAt: number;
 }
@@ -157,6 +176,31 @@ export async function saveConversation(conversation: ChatConversation): Promise<
   return mapConversationFromPersistence(savedConversation);
 }
 
+export async function saveConversationMeta(conversation: ChatConversation): Promise<void> {
+  await invoke("save_conversation_meta", {
+    conversation: mapConversationMetaToPersistence(conversation),
+  });
+}
+
+export async function upsertChatMessages(
+  conversationId: string,
+  messages: ChatMessage[],
+  positionOffset: number,
+): Promise<void> {
+  await invoke("upsert_chat_messages", {
+    conversationId,
+    messages: messages.map(mapMessageToPersistence),
+    positionOffset,
+  });
+}
+
+export async function saveChatMessageState(conversationId: string, message: ChatMessage): Promise<void> {
+  await invoke("save_chat_message_state", {
+    conversationId,
+    message: mapMessageStateToPersistence(message),
+  });
+}
+
 export async function deleteStoredConversation(conversationId: string): Promise<void> {
   await invoke("delete_conversation", { conversationId });
 }
@@ -233,28 +277,46 @@ function mapConversationFromPersistence(conversation: PersistedChatConversation)
     ...conversation,
     archivedAt: conversation.archivedAt ?? null,
     pinnedAt: conversation.pinnedAt ?? null,
+    unreadAt: conversation.unreadAt ?? null,
     messages: conversation.messages.map(mapMessageFromPersistence),
   };
 }
 
 function mapConversationToPersistence(conversation: ChatConversation): PersistedChatConversation {
   return {
+    ...mapConversationMetaToPersistence(conversation),
+    messages: conversation.messages.map(mapMessageToPersistence),
+  };
+}
+
+function mapConversationMetaToPersistence(conversation: ChatConversation): PersistedChatConversationMeta {
+  return {
     id: conversation.id,
     projectId: conversation.projectId,
     modelId: conversation.modelId,
     title: conversation.title,
-    messages: conversation.messages.map(mapMessageToPersistence),
     createdAt: conversation.createdAt,
     updatedAt: conversation.updatedAt,
     pinnedAt: conversation.pinnedAt ?? null,
     archivedAt: conversation.archivedAt ?? null,
+    unreadAt: conversation.unreadAt ?? null,
   };
 }
 
 function mapMessageFromPersistence(message: PersistedChatMessage): ChatMessage {
+  const agentRun = parseJsonField<ChatAgentRunView>(message.agentRunJson);
+  const uiState = parseJsonField<ChatMessageUiState>(message.uiStateJson);
+  const normalizedAgentRun = agentRun ? normalizePersistedAgentRun(agentRun) : undefined;
+
   return {
-    ...message,
-    status: message.status ?? undefined,
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    createdAt: message.createdAt,
+    status: normalizePersistedMessageStatus(message.status, normalizedAgentRun),
+    attachments: message.attachments?.length ? message.attachments : undefined,
+    agentRun: normalizedAgentRun,
+    uiState: uiState ?? undefined,
   };
 }
 
@@ -265,6 +327,69 @@ function mapMessageToPersistence(message: ChatMessage): PersistedChatMessage {
     content: message.content,
     createdAt: message.createdAt,
     status: message.status ?? null,
+    agentRunJson: stringifyJsonField(message.agentRun),
+    uiStateJson: stringifyJsonField(message.uiState),
+  };
+}
+
+function parseJsonField<T>(value: string | null | undefined): T | null {
+  if (!value) return null;
+
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return null;
+  }
+}
+
+function stringifyJsonField(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return null;
+  }
+}
+
+function normalizePersistedAgentRun(agentRun: ChatAgentRunView): ChatAgentRunView {
+  const hasCompletedAt = Boolean(agentRun.completedAt);
+  const isActive =
+    agentRun.status === "starting" ||
+    agentRun.status === "running" ||
+    agentRun.status === "waiting_for_approval";
+
+  if (!isActive || hasCompletedAt) {
+    return agentRun;
+  }
+
+  const interruptedAt = agentRun.lastResponseAt ?? agentRun.firstResponseAt ?? agentRun.startedAt ?? Date.now();
+  return {
+    ...agentRun,
+    status: "cancelled",
+    completedAt: interruptedAt,
+    error: agentRun.error ?? "应用关闭后，该次处理已中断。",
+  };
+}
+
+function normalizePersistedMessageStatus(
+  status: ChatMessage["status"] | null,
+  agentRun: ChatAgentRunView | undefined,
+): ChatMessage["status"] | undefined {
+  if (status === "pending" && agentRun?.status === "cancelled") {
+    return "sent";
+  }
+
+  return status ?? undefined;
+}
+
+function mapMessageStateToPersistence(message: ChatMessage): PersistedChatMessageState {
+  return {
+    id: message.id,
+    content: message.content,
+    status: message.status ?? null,
+    agentRunJson: stringifyJsonField(message.agentRun),
+    uiStateJson: stringifyJsonField(message.uiState),
   };
 }
 
@@ -311,6 +436,7 @@ export function defaultUiPreferences(): UiPreferencesSnapshot {
   return {
     sidebarConversationSort: "updated",
     sidebarProjectSort: "created",
+    sidebarProjectOrder: [],
     sidebarSectionOrder: "projects_first",
     updatedAt: 0,
   };
@@ -322,9 +448,25 @@ function normalizeUiPreferences(preferences: UiPreferencesSnapshot | null | unde
 
   return {
     sidebarConversationSort: preferences.sidebarConversationSort === "created" ? "created" : "updated",
-    sidebarProjectSort: preferences.sidebarProjectSort === "recent" ? "recent" : "created",
+    sidebarProjectSort:
+      preferences.sidebarProjectSort === "recent" || preferences.sidebarProjectSort === "manual"
+        ? preferences.sidebarProjectSort
+        : "created",
+    sidebarProjectOrder: normalizeStringList(preferences.sidebarProjectOrder),
     sidebarSectionOrder:
       preferences.sidebarSectionOrder === "conversations_first" ? "conversations_first" : "projects_first",
     updatedAt: preferences.updatedAt ?? 0,
   };
+}
+
+function normalizeStringList(values: string[] | null | undefined) {
+  if (!Array.isArray(values)) return [];
+  const seen = new Set<string>();
+  return values.filter((value) => {
+    if (typeof value !== "string") return false;
+    const normalizedValue = value.trim();
+    if (!normalizedValue || seen.has(normalizedValue)) return false;
+    seen.add(normalizedValue);
+    return true;
+  });
 }

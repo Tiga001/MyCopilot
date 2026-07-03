@@ -1,11 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import { ResizeHandle } from "../components/layout/ResizeHandle";
 import { LeftSidebar } from "../components/sidebar/LeftSidebar";
 import { RightSidebar } from "../components/sidebar/RightSidebar";
 import { useFrontendConfig } from "../config/FrontendConfigProvider";
-import { modelConfig } from "../config/modelConfig";
 import { useProjectSettings } from "../config/ProjectSettingsProvider";
 import {
   approveAgentAction,
@@ -16,12 +14,10 @@ import {
 import { ChatConversationPage } from "../features/chat/ChatConversationPage";
 import { NewConversationPage } from "../features/chat/NewConversationPage";
 import type {
-  ChatAgentCommandOutput,
-  ChatAgentRunView,
-  ChatAgentTimelineItem,
   ChatComposerDraft,
   ChatConversation,
   ChatMessage,
+  ChatMessageUiState,
   ChatSubmitOptions,
 } from "../features/chat/chatTypes";
 import {
@@ -31,544 +27,171 @@ import {
   loadComposerDrafts,
   loadConversations,
   loadUiPreferences,
+  saveChatMessageState,
   saveComposerDraft,
   saveConversation,
+  saveConversationMeta,
   saveUiPreferences,
+  upsertChatMessages,
 } from "../features/storage/storageClient";
 import type { UiPreferencesSnapshot } from "../features/storage/storageClient";
 import { SettingsPage } from "../features/settings/SettingsPage";
+import { getAgentActionId, getErrorMessage } from "./agentActionUtils";
+import {
+  appendTimelineItem,
+  applyAgentActionExecutionToChatMessage,
+  applyAgentEventToChatMessage,
+  applyAgentOutputToChatMessage,
+  ensureAgentRun,
+  shouldTouchConversationForAgentEvent,
+} from "./agentEventReducer";
+import {
+  CENTER_MIN_WIDTH,
+  LEFT_DEFAULT_WIDTH,
+  LEFT_MIN_WIDTH,
+  NEW_CONVERSATION_DRAFT_ID,
+  RIGHT_DEFAULT_WIDTH,
+  RIGHT_MIN_WIDTH,
+  SIDE_MAX_WIDTH,
+  THINKING_PLACEHOLDER,
+  clamp,
+} from "./appConstants";
+import type { ActiveRunBinding, AppView, Side, WorkspaceView } from "./appTypes";
+import {
+  createAssistantMessage,
+  createComposerDraft,
+  createConversationTitle,
+  createId,
+  createUserMessage,
+  mergeConversationMessageFromBackend,
+} from "./chatMessageFactory";
 import type {
   AgentActionExecutionOutput,
   AgentChatOutput,
-  AgentCommandExecutionResult,
-  AgentConversationMessage,
   AgentConversationTurnInput,
   AgentEvent,
   AgentInputAttachment,
   AgentProposedAction,
 } from "@agent";
 
-const LEFT_DEFAULT_WIDTH = 288;
-const RIGHT_DEFAULT_WIDTH = 360;
-const LEFT_MIN_WIDTH = 220;
-const RIGHT_MIN_WIDTH = 280;
-const SIDE_MAX_WIDTH = 560;
-const CENTER_MIN_WIDTH = 480;
-const NEW_CONVERSATION_DRAFT_ID = "new-conversation";
+const STREAM_MESSAGE_SAVE_THROTTLE_MS = 900;
+const DEFAULT_AGENT_MAX_TOKENS = 30000;
 
-type Side = "left" | "right";
-type AppView = "workspace" | "settings";
-type WorkspaceView = "newConversation" | "conversation";
-type ActiveRunBinding = {
+function SidebarToggleIcon({ open, side }: { open: boolean; side: Side }) {
+  return (
+    <span
+      aria-hidden="true"
+      className="panel-toggle__icon"
+      data-open={open ? "true" : "false"}
+      data-side={side}
+    />
+  );
+}
+
+type PendingMessageSave = {
   conversationId: string;
-  pendingMessageId: string;
+  message: ChatMessage;
 };
 
-const THINKING_PLACEHOLDER = "正在思考...";
+type PendingMessagesUpsert = {
+  conversationId: string;
+  messages: ChatMessage[];
+  positionOffset: number;
+};
 
-function clamp(value: number, min: number, max: number) {
-  return Math.min(Math.max(value, min), max);
+type MessagePersistenceMode = "none" | "throttled" | "immediate";
+
+function stringifyComparable(value: unknown) {
+  return JSON.stringify(value ?? null);
 }
 
-function createId(prefix: string) {
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+function hasConversationMetaChanged(previous: ChatConversation, next: ChatConversation) {
+  if (previous.projectId !== next.projectId) return true;
+  if (previous.modelId !== next.modelId) return true;
+  if (previous.title !== next.title) return true;
+  if (previous.createdAt !== next.createdAt) return true;
+  if (previous.updatedAt !== next.updatedAt) return true;
+  if ((previous.pinnedAt ?? null) !== (next.pinnedAt ?? null)) return true;
+  if ((previous.archivedAt ?? null) !== (next.archivedAt ?? null)) return true;
+  if ((previous.unreadAt ?? null) !== (next.unreadAt ?? null)) return true;
+
+  return false;
 }
 
-function createConversationTitle(message: string) {
-  const firstLine = message.split(/\r?\n/)[0]?.replace(/\s+/g, " ").trim() || "新对话";
-  return firstLine.length > 24 ? `${firstLine.slice(0, 24)}...` : firstLine;
-}
-
-function createUserMessage(content: string): ChatMessage {
-  return {
-    id: createId("message"),
-    role: "user",
-    content,
-    createdAt: Date.now(),
-    status: "sent",
-  };
-}
-
-function createAssistantMessage(content: string, status: ChatMessage["status"] = "sent"): ChatMessage {
-  return {
-    id: createId("message"),
-    role: "assistant",
-    content,
-    createdAt: Date.now(),
-    status,
-  };
-}
-
-function createComposerDraft(
-  overrides: Partial<ChatComposerDraft> = {},
-): ChatComposerDraft {
-  const draft = {
-    message: "",
-    permissionMode: "full",
-    modelId: modelConfig.defaults.selectedModelId,
-    projectId: null,
-    attachments: [],
-    updatedAt: Date.now(),
-    ...overrides,
-  };
-
-  return {
-    ...draft,
-    modelId: draft.modelId || modelConfig.defaults.selectedModelId,
-    permissionMode: draft.permissionMode === "default" ? "default" : "full",
-    attachments: draft.attachments ?? [],
-  };
-}
-
-function getChatMessageStatusFromConversationMessage(
-  status: AgentConversationMessage["status"],
-): ChatMessage["status"] {
-  return status ?? undefined;
-}
-
-function mergeConversationMessageFromBackend(
-  currentMessage: ChatMessage,
-  backendMessage: AgentConversationMessage,
-): ChatMessage {
-  return {
-    ...currentMessage,
-    id: backendMessage.id,
-    role: backendMessage.role,
-    content: backendMessage.content,
-    createdAt: backendMessage.createdAt,
-    status: getChatMessageStatusFromConversationMessage(backendMessage.status),
-  };
-}
-
-function createAgentRun(runId: string | null, status: ChatAgentRunView["status"] = "starting"): ChatAgentRunView {
-  return {
-    runId,
-    status,
-    toolDefinitions: [],
-    toolCalls: [],
-    toolResults: [],
-    approvals: [],
-    diffs: [],
-    commandOutputs: [],
-    timeline: [],
-  };
-}
-
-function ensureAgentRun(
-  currentRun: ChatAgentRunView | undefined,
-  runId: string | null | undefined,
-  status?: ChatAgentRunView["status"],
-): ChatAgentRunView {
-  if (!currentRun) {
-    return createAgentRun(runId ?? null, status);
-  }
-
-  return {
-    ...currentRun,
-    runId: currentRun.runId ?? runId ?? null,
-    status: status ?? currentRun.status,
-    timeline: currentRun.timeline ?? [],
-  };
-}
-
-function upsertById<T>(items: T[], nextItem: T, getId: (item: T) => string) {
-  const nextId = getId(nextItem);
-  const itemIndex = items.findIndex((item) => getId(item) === nextId);
-
-  if (itemIndex === -1) {
-    return [...items, nextItem];
-  }
-
-  return items.map((item, index) => (index === itemIndex ? nextItem : item));
-}
-
-function getAgentActionId(action: AgentProposedAction) {
-  if (action.type === "diff") return action.diff.id;
-  if (action.type === "command") return action.command.id;
-  return action.call.id;
-}
-
-function upsertAgentAction(actions: AgentProposedAction[], nextAction: AgentProposedAction) {
-  return upsertById(actions, nextAction, getAgentActionId);
-}
-
-function appendTimelineItem(run: ChatAgentRunView, item: ChatAgentTimelineItem): ChatAgentTimelineItem[] {
-  if (run.timeline.some((timelineItem) => timelineItem.id === item.id)) {
-    return run.timeline.map((timelineItem) => (timelineItem.id === item.id ? item : timelineItem));
-  }
-
-  return [...run.timeline, item];
-}
-
-function appendApprovalActionsToTimeline(
-  timeline: ChatAgentTimelineItem[],
-  actions: AgentProposedAction[],
-): ChatAgentTimelineItem[] {
-  return actions.reduce((currentTimeline, action) => {
-    const actionId = getAgentActionId(action);
-    const timelineItem: ChatAgentTimelineItem = {
-      id: `approval-${actionId}`,
-      type: "approval",
-      actionId,
-    };
-
-    if (currentTimeline.some((item) => item.id === timelineItem.id)) {
-      return currentTimeline.map((item) => (item.id === timelineItem.id ? timelineItem : item));
-    }
-
-    return [...currentTimeline, timelineItem];
-  }, timeline);
-}
-
-function appendMessageDeltaToTimeline(run: ChatAgentRunView, delta: string): ChatAgentTimelineItem[] {
-  const lastItem = run.timeline[run.timeline.length - 1];
-
-  if (lastItem?.type === "message") {
-    return run.timeline.map((timelineItem) =>
-      timelineItem.id === lastItem.id && timelineItem.type === "message"
-        ? {
-            ...timelineItem,
-            content: `${timelineItem.content}${delta}`,
-          }
-        : timelineItem,
+function hasExistingMessageStructureChanged(previous: ChatConversation, next: ChatConversation) {
+  if (next.messages.length < previous.messages.length) return true;
+  return previous.messages.some((message, index) => {
+    const nextMessage = next.messages[index];
+    return (
+      !nextMessage ||
+      message.id !== nextMessage.id ||
+      message.role !== nextMessage.role ||
+      message.createdAt !== nextMessage.createdAt
     );
-  }
-
-  return [
-    ...run.timeline,
-    {
-      id: `message-${run.timeline.length + 1}`,
-      type: "message",
-      content: delta,
-    },
-  ];
+  });
 }
 
-function appendMessageToTimeline(run: ChatAgentRunView, content: string): ChatAgentTimelineItem[] {
-  const lastItem = run.timeline[run.timeline.length - 1];
-
-  if (lastItem?.type === "message") {
-    return run.timeline.map((timelineItem) =>
-      timelineItem.id === lastItem.id && timelineItem.type === "message"
-        ? {
-            ...timelineItem,
-            content,
-          }
-        : timelineItem,
+function hasNewMessageStructureIssue(previous: ChatConversation, next: ChatConversation) {
+  return next.messages.slice(previous.messages.length).some((message) => {
+    return (
+      !message.id ||
+      (message.role !== "user" && message.role !== "assistant") ||
+      typeof message.createdAt !== "number"
     );
-  }
-
-  return [
-    ...run.timeline,
-    {
-      id: `message-${run.timeline.length + 1}`,
-      type: "message",
-      content,
-    },
-  ];
+  });
 }
 
-function getMessageContentAfterDelta(content: string, delta: string) {
-  const previousContent = content === THINKING_PLACEHOLDER ? "" : content;
-  return `${previousContent}${delta}`;
-}
-
-function getFinalMessageContent(currentContent: string, finalContent?: string) {
-  if (!finalContent) {
-    return currentContent === THINKING_PLACEHOLDER ? "" : currentContent;
-  }
-
-  if (!currentContent || currentContent === THINKING_PLACEHOLDER) {
-    return finalContent;
-  }
-
-  return currentContent;
-}
-
-function getChatMessageStatusFromAgentStatus(status: AgentChatOutput["status"]): ChatMessage["status"] {
-  if (status === "running" || status === "waiting_for_approval" || status === "idle") return "pending";
-  if (status === "failed" || status === "cancelled") return "error";
-  return "sent";
-}
-
-function applyAgentEventToChatMessage(message: ChatMessage, agentEvent: AgentEvent): ChatMessage {
-  const runId = agentEvent.runId ?? message.agentRun?.runId ?? null;
-  const currentRun = ensureAgentRun(message.agentRun, runId);
-
-  if (agentEvent.type === "started") {
-    return {
-      ...message,
-      status: "pending",
-      agentRun: {
-        ...currentRun,
-        runId: agentEvent.runId,
-        status: "running",
-        toolDefinitions: agentEvent.toolDefinitions,
-      },
-    };
-  }
-
-  if (agentEvent.type === "state") {
-    return {
-      ...message,
-      status: getChatMessageStatusFromAgentStatus(agentEvent.state.status),
-      agentRun: {
-        ...currentRun,
-        status: agentEvent.state.status,
-        state: agentEvent.state,
-        error: agentEvent.state.lastError ?? currentRun.error,
-      },
-    };
-  }
-
-  if (agentEvent.type === "message_delta") {
-    return {
-      ...message,
-      content: getMessageContentAfterDelta(message.content, agentEvent.delta),
-      status: "pending",
-      agentRun: {
-        ...currentRun,
-        status: "running",
-        timeline: appendMessageDeltaToTimeline(currentRun, agentEvent.delta),
-      },
-    };
-  }
-
-  if (agentEvent.type === "message") {
-    return {
-      ...message,
-      content: agentEvent.content,
-      status: "pending",
-      agentRun: {
-        ...currentRun,
-        status: "running",
-        timeline: appendMessageToTimeline(currentRun, agentEvent.content),
-      },
-    };
-  }
-
-  if (agentEvent.type === "tool_call") {
-    return {
-      ...message,
-      status: "pending",
-      agentRun: {
-        ...currentRun,
-        status: "running",
-        toolCalls: upsertById(currentRun.toolCalls, agentEvent.call, (call) => call.id),
-        timeline: appendTimelineItem(currentRun, {
-          id: `tool-call-${agentEvent.call.id}`,
-          type: "tool_call",
-          callId: agentEvent.call.id,
-        }),
-      },
-    };
-  }
-
-  if (agentEvent.type === "tool_result") {
-    return {
-      ...message,
-      status: "pending",
-      agentRun: {
-        ...currentRun,
-        status: "running",
-        toolResults: upsertById(currentRun.toolResults, agentEvent.result, (result) => result.callId),
-      },
-    };
-  }
-
-  if (agentEvent.type === "approval_required") {
-    return {
-      ...message,
-      status: "pending",
-      agentRun: {
-        ...currentRun,
-        status: "waiting_for_approval",
-        approvals: upsertAgentAction(currentRun.approvals, agentEvent.action),
-        timeline: appendTimelineItem(currentRun, {
-          id: `approval-${getAgentActionId(agentEvent.action)}`,
-          type: "approval",
-          actionId: getAgentActionId(agentEvent.action),
-        }),
-      },
-    };
-  }
-
-  if (agentEvent.type === "diff") {
-    return {
-      ...message,
-      status: "pending",
-      agentRun: {
-        ...currentRun,
-        status: "running",
-        diffs: upsertById(currentRun.diffs, agentEvent.diff, (diff) => diff.id),
-        timeline: appendTimelineItem(currentRun, {
-          id: `diff-${agentEvent.diff.id}`,
-          type: "diff",
-          diffId: agentEvent.diff.id,
-        }),
-      },
-    };
-  }
-
-  if (agentEvent.type === "command_output") {
-    const commandOutput: ChatAgentCommandOutput = {
-      id: `${agentEvent.runId}-command-output-${currentRun.commandOutputs.length + 1}`,
-      command: agentEvent.command,
-      stream: agentEvent.stream,
-      output: agentEvent.output,
-    };
-
-    return {
-      ...message,
-      status: "pending",
-      agentRun: {
-        ...currentRun,
-        status: "running",
-        commandOutputs: [...currentRun.commandOutputs, commandOutput],
-        timeline: appendTimelineItem(currentRun, {
-          id: `command-output-${commandOutput.id}`,
-          type: "command_output",
-          outputId: commandOutput.id,
-        }),
-      },
-    };
-  }
-
-  if (agentEvent.type === "error") {
-    return {
-      ...message,
-      content: agentEvent.recoverable ? message.content : agentEvent.message,
-      status: agentEvent.recoverable ? message.status : "error",
-      agentRun: {
-        ...currentRun,
-        status: agentEvent.recoverable ? currentRun.status : "failed",
-        error: agentEvent.message,
-        timeline: appendTimelineItem(currentRun, {
-          id: `error-${currentRun.timeline.length + 1}`,
-          type: "error",
-          message: agentEvent.message,
-        }),
-      },
-    };
-  }
-
-  const nextStatus = agentEvent.status ?? (agentEvent.success ? "completed" : "failed");
-  const proposedActions = agentEvent.proposedActions ?? [];
+function getImmediateAgentRunSignature(message: ChatMessage) {
+  const run = message.agentRun;
+  if (!run) return null;
 
   return {
-    ...message,
-    content: getFinalMessageContent(message.content, agentEvent.content),
-    status: nextStatus === "waiting_for_approval" ? "pending" : agentEvent.success ? "sent" : "error",
-    agentRun: {
-      ...currentRun,
-      status: nextStatus,
-      usage: agentEvent.usage,
-      finishReason: agentEvent.finishReason,
-      approvals: proposedActions.reduce(upsertAgentAction, currentRun.approvals),
-      timeline: appendApprovalActionsToTimeline(currentRun.timeline, proposedActions),
-    },
+    runId: run.runId,
+    status: run.status,
+    completedAt: run.completedAt ?? null,
+    error: run.error ?? null,
+    finishReason: run.finishReason ?? null,
+    usage: run.usage ?? null,
+    toolCalls: run.toolCalls,
+    toolResults: run.toolResults,
+    approvals: run.approvals,
+    diffs: run.diffs,
+    commandOutputs: run.commandOutputs,
+    timeline: run.timeline.map((item) =>
+      item.type === "message"
+        ? {
+            id: item.id,
+            type: item.type,
+          }
+        : item,
+    ),
   };
 }
 
-function applyAgentOutputToChatMessage(message: ChatMessage, output: AgentChatOutput): ChatMessage {
-  const streamedContentEvents = output.events.some(
-    (event) => event.type === "message" || event.type === "message_delta",
-  );
-  const messageWithEvents = output.events.reduce(applyAgentEventToChatMessage, message);
-  const currentRun = ensureAgentRun(messageWithEvents.agentRun, output.runId, output.status);
-  const nextContent =
-    output.content && (!streamedContentEvents || !messageWithEvents.content || messageWithEvents.content === THINKING_PLACEHOLDER)
-      ? output.content
-      : messageWithEvents.content;
+function getMessagePersistenceMode(previous: ChatMessage, next: ChatMessage): MessagePersistenceMode {
+  const previousContent = previous.content;
+  const nextContent = next.content;
+  const previousAgentRun = stringifyComparable(previous.agentRun);
+  const nextAgentRun = stringifyComparable(next.agentRun);
+  const previousUiState = stringifyComparable(previous.uiState);
+  const nextUiState = stringifyComparable(next.uiState);
 
-  return {
-    ...messageWithEvents,
-    content: nextContent,
-    status: getChatMessageStatusFromAgentStatus(output.status),
-    agentRun: {
-      ...currentRun,
-      status: output.status,
-      toolDefinitions: output.toolDefinitions,
-      usage: output.usage,
-      finishReason: output.finishReason,
-      approvals: output.proposedActions.reduce(upsertAgentAction, currentRun.approvals),
-      timeline: appendApprovalActionsToTimeline(currentRun.timeline, output.proposedActions),
-    },
-  };
-}
-
-function createCommandOutputsFromExecution(
-  actionId: string,
-  commandResult: AgentCommandExecutionResult,
-): ChatAgentCommandOutput[] {
-  const outputs: ChatAgentCommandOutput[] = [];
-
-  if (commandResult.stdout) {
-    outputs.push({
-      id: `${actionId}-stdout`,
-      command: commandResult.command,
-      stream: "stdout",
-      output: commandResult.stdout,
-    });
+  if (
+    previousContent === nextContent &&
+    previous.status === next.status &&
+    previousAgentRun === nextAgentRun &&
+    previousUiState === nextUiState
+  ) {
+    return "none";
   }
 
-  if (commandResult.stderr) {
-    outputs.push({
-      id: `${actionId}-stderr`,
-      command: commandResult.command,
-      stream: "stderr",
-      output: commandResult.stderr,
-    });
+  if (previous.status !== next.status) return "immediate";
+  if (previousUiState !== nextUiState) return "immediate";
+  if (stringifyComparable(getImmediateAgentRunSignature(previous)) !== stringifyComparable(getImmediateAgentRunSignature(next))) {
+    return "immediate";
   }
 
-  if (outputs.length === 0 && commandResult.error) {
-    outputs.push({
-      id: `${actionId}-error`,
-      command: commandResult.command,
-      stream: "stderr",
-      output: commandResult.error,
-    });
-  }
-
-  return outputs;
-}
-
-function applyAgentActionExecutionToChatMessage(
-  message: ChatMessage,
-  execution: AgentActionExecutionOutput,
-): ChatMessage {
-  const messageWithAgentOutput = applyAgentOutputToChatMessage(message, execution.agentOutput);
-
-  if (!execution.commandResult) {
-    return messageWithAgentOutput;
-  }
-
-  const currentRun = ensureAgentRun(messageWithAgentOutput.agentRun, execution.agentOutput.runId);
-  const commandOutputs = createCommandOutputsFromExecution(execution.actionId, execution.commandResult);
-
-  return {
-    ...messageWithAgentOutput,
-    agentRun: {
-      ...currentRun,
-      commandOutputs: [...currentRun.commandOutputs, ...commandOutputs],
-      timeline: [
-        ...currentRun.timeline,
-        ...commandOutputs.map(
-          (output): ChatAgentTimelineItem => ({
-            id: `command-output-${output.id}`,
-            type: "command_output",
-            outputId: output.id,
-          }),
-        ),
-      ],
-    },
-  };
-}
-
-function getErrorMessage(error: unknown) {
-  if (typeof error === "string") return error;
-  if (error instanceof Error) return error.message;
-  return "请求失败，请检查 API 配置后重试。";
+  return "throttled";
 }
 
 export function App() {
@@ -577,6 +200,15 @@ export function App() {
   const cancelledRunIdsRef = useRef<Set<string>>(new Set());
   const activeRunBindingsRef = useRef<Map<string, ActiveRunBinding>>(new Map());
   const bufferedAgentEventsRef = useRef<Map<string, AgentEvent[]>>(new Map());
+  const previousPersistedConversationsRef = useRef<ChatConversation[]>([]);
+  const conversationSaveQueuesRef = useRef<Map<string, Promise<void>>>(new Map());
+  const conversationMetaSaveQueuesRef = useRef<Map<string, Promise<void>>>(new Map());
+  const messagesUpsertQueuesRef = useRef<Map<string, Promise<void>>>(new Map());
+  const messageSaveQueuesRef = useRef<Map<string, Promise<void>>>(new Map());
+  const pendingMessageSaveTimersRef = useRef<Map<string, number>>(new Map());
+  const pendingMessageSavePayloadsRef = useRef<Map<string, PendingMessageSave>>(new Map());
+  const deletedConversationIdsRef = useRef<Set<string>>(new Set());
+  const activeConversationIdRef = useRef<string | null>(null);
   const { t } = useFrontendConfig();
   const {
     deleteProject,
@@ -601,6 +233,10 @@ export function App() {
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
 
+  useEffect(() => {
+    activeConversationIdRef.current = activeConversationId;
+  }, [activeConversationId]);
+
   const resizeSide = useCallback(
     (side: Side, deltaX: number) => {
       const shellWidth = shellRef.current?.clientWidth ?? window.innerWidth;
@@ -621,14 +257,80 @@ export function App() {
   useEffect(() => {
     const keepCenterVisible = () => {
       const shellWidth = shellRef.current?.clientWidth ?? window.innerWidth;
-      if (shellWidth < 920 && rightOpen) setRightOpen(false);
-      if (shellWidth < 680 && leftOpen) setLeftOpen(false);
+      let nextLeftOpen = leftOpen;
+      let nextRightOpen = rightOpen;
+      let nextLeftWidth = leftWidth;
+      let nextRightWidth = rightWidth;
+
+      const minimumOpenSideWidth =
+        (nextLeftOpen ? LEFT_MIN_WIDTH : 0) + (nextRightOpen ? RIGHT_MIN_WIDTH : 0);
+
+      if (shellWidth < CENTER_MIN_WIDTH + minimumOpenSideWidth) {
+        if (nextRightOpen) {
+          nextRightOpen = false;
+        }
+        if (shellWidth < CENTER_MIN_WIDTH + (nextLeftOpen ? LEFT_MIN_WIDTH : 0) && nextLeftOpen) {
+          nextLeftOpen = false;
+        }
+      }
+
+      if (nextLeftOpen) {
+        nextLeftWidth = clamp(nextLeftWidth, LEFT_MIN_WIDTH, SIDE_MAX_WIDTH);
+      }
+      if (nextRightOpen) {
+        nextRightWidth = clamp(nextRightWidth, RIGHT_MIN_WIDTH, SIDE_MAX_WIDTH);
+      }
+
+      const maxOpenSideWidth = shellWidth - CENTER_MIN_WIDTH;
+      let overflow =
+        (nextLeftOpen ? nextLeftWidth : 0) +
+        (nextRightOpen ? nextRightWidth : 0) -
+        maxOpenSideWidth;
+
+      const shrinkLeft = () => {
+        if (!nextLeftOpen || overflow <= 0) return;
+        const shrinkAmount = Math.min(overflow, Math.max(0, nextLeftWidth - LEFT_MIN_WIDTH));
+        nextLeftWidth -= shrinkAmount;
+        overflow -= shrinkAmount;
+      };
+      const shrinkRight = () => {
+        if (!nextRightOpen || overflow <= 0) return;
+        const shrinkAmount = Math.min(overflow, Math.max(0, nextRightWidth - RIGHT_MIN_WIDTH));
+        nextRightWidth -= shrinkAmount;
+        overflow -= shrinkAmount;
+      };
+
+      if (overflow > 0) {
+        const leftExcess = nextLeftOpen ? nextLeftWidth - LEFT_MIN_WIDTH : 0;
+        const rightExcess = nextRightOpen ? nextRightWidth - RIGHT_MIN_WIDTH : 0;
+
+        if (leftExcess >= rightExcess) {
+          shrinkLeft();
+          shrinkRight();
+        } else {
+          shrinkRight();
+          shrinkLeft();
+        }
+      }
+
+      if (nextLeftOpen !== leftOpen) {
+        setLeftOpen(nextLeftOpen);
+      }
+      if (nextRightOpen !== rightOpen) {
+        setRightOpen(nextRightOpen);
+      }
+      if (Math.abs(nextLeftWidth - leftWidth) > 0.5) {
+        setLeftWidth(nextLeftWidth);
+      }
+      if (Math.abs(nextRightWidth - rightWidth) > 0.5) {
+        setRightWidth(nextRightWidth);
+      }
     };
 
     keepCenterVisible();
     window.addEventListener("resize", keepCenterVisible);
     return () => window.removeEventListener("resize", keepCenterVisible);
-  }, [leftOpen, rightOpen]);
+  }, [leftOpen, leftWidth, rightOpen, rightWidth]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -636,6 +338,7 @@ export function App() {
     void loadConversations()
       .then((storedConversations) => {
         if (!isCancelled) {
+          previousPersistedConversationsRef.current = storedConversations;
           setConversations(storedConversations);
         }
       })
@@ -699,15 +402,206 @@ export function App() {
     };
   }, []);
 
+  const enqueueConversationSave = useCallback((conversation: ChatConversation) => {
+    deletedConversationIdsRef.current.delete(conversation.id);
+
+    const previousSave = conversationSaveQueuesRef.current.get(conversation.id) ?? Promise.resolve();
+    const nextSave = previousSave
+      .catch(() => undefined)
+      .then(async () => {
+        if (deletedConversationIdsRef.current.has(conversation.id)) return;
+        await saveConversation(conversation);
+      })
+      .catch((error) => {
+        console.error("Failed to save conversation to SQLite", error);
+      });
+
+    conversationSaveQueuesRef.current.set(conversation.id, nextSave);
+    void nextSave.finally(() => {
+      if (conversationSaveQueuesRef.current.get(conversation.id) === nextSave) {
+        conversationSaveQueuesRef.current.delete(conversation.id);
+      }
+    });
+  }, []);
+
+  const enqueueConversationMetaSave = useCallback((conversation: ChatConversation) => {
+    deletedConversationIdsRef.current.delete(conversation.id);
+
+    const previousMetaSave = conversationMetaSaveQueuesRef.current.get(conversation.id) ?? Promise.resolve();
+    const pendingConversationSave =
+      conversationSaveQueuesRef.current.get(conversation.id) ?? Promise.resolve();
+    const nextSave = Promise.all([
+      pendingConversationSave.catch(() => undefined),
+      previousMetaSave.catch(() => undefined),
+    ])
+      .then(async () => {
+        if (deletedConversationIdsRef.current.has(conversation.id)) return;
+        await saveConversationMeta(conversation);
+      })
+      .catch((error) => {
+        console.error("Failed to save conversation metadata to SQLite", error);
+      });
+
+    conversationMetaSaveQueuesRef.current.set(conversation.id, nextSave);
+    void nextSave.finally(() => {
+      if (conversationMetaSaveQueuesRef.current.get(conversation.id) === nextSave) {
+        conversationMetaSaveQueuesRef.current.delete(conversation.id);
+      }
+    });
+  }, []);
+
+  const enqueueMessagesUpsert = useCallback((payload: PendingMessagesUpsert) => {
+    if (payload.messages.length === 0) return;
+
+    const previousUpsert = messagesUpsertQueuesRef.current.get(payload.conversationId) ?? Promise.resolve();
+    const pendingConversationSave =
+      conversationSaveQueuesRef.current.get(payload.conversationId) ?? Promise.resolve();
+    const nextUpsert = Promise.all([
+      pendingConversationSave.catch(() => undefined),
+      previousUpsert.catch(() => undefined),
+    ])
+      .then(async () => {
+        if (deletedConversationIdsRef.current.has(payload.conversationId)) return;
+        await upsertChatMessages(payload.conversationId, payload.messages, payload.positionOffset);
+      })
+      .catch((error) => {
+        console.error("Failed to upsert chat messages to SQLite", error);
+      });
+
+    messagesUpsertQueuesRef.current.set(payload.conversationId, nextUpsert);
+    void nextUpsert.finally(() => {
+      if (messagesUpsertQueuesRef.current.get(payload.conversationId) === nextUpsert) {
+        messagesUpsertQueuesRef.current.delete(payload.conversationId);
+      }
+    });
+  }, []);
+
+  const enqueueMessageSaveNow = useCallback((payload: PendingMessageSave) => {
+    const key = `${payload.conversationId}:${payload.message.id}`;
+    const previousMessageSave = messageSaveQueuesRef.current.get(key) ?? Promise.resolve();
+    const pendingConversationSave =
+      conversationSaveQueuesRef.current.get(payload.conversationId) ?? Promise.resolve();
+    const pendingMessagesUpsert =
+      messagesUpsertQueuesRef.current.get(payload.conversationId) ?? Promise.resolve();
+
+    const nextSave = Promise.all([
+      pendingConversationSave.catch(() => undefined),
+      pendingMessagesUpsert.catch(() => undefined),
+      previousMessageSave.catch(() => undefined),
+    ])
+      .then(async () => {
+        if (deletedConversationIdsRef.current.has(payload.conversationId)) return;
+        await saveChatMessageState(payload.conversationId, payload.message);
+      })
+      .catch((error) => {
+        console.error("Failed to save chat message state to SQLite", error);
+      });
+
+    messageSaveQueuesRef.current.set(key, nextSave);
+    void nextSave.finally(() => {
+      if (messageSaveQueuesRef.current.get(key) === nextSave) {
+        messageSaveQueuesRef.current.delete(key);
+      }
+    });
+  }, []);
+
+  const enqueueMessageSave = useCallback(
+    (payload: PendingMessageSave, mode: Exclude<MessagePersistenceMode, "none">) => {
+      const key = `${payload.conversationId}:${payload.message.id}`;
+      pendingMessageSavePayloadsRef.current.set(key, payload);
+
+      if (mode === "immediate") {
+        const existingTimer = pendingMessageSaveTimersRef.current.get(key);
+        if (existingTimer !== undefined) {
+          window.clearTimeout(existingTimer);
+          pendingMessageSaveTimersRef.current.delete(key);
+        }
+
+        const latestPayload = pendingMessageSavePayloadsRef.current.get(key) ?? payload;
+        pendingMessageSavePayloadsRef.current.delete(key);
+        enqueueMessageSaveNow(latestPayload);
+        return;
+      }
+
+      if (pendingMessageSaveTimersRef.current.has(key)) return;
+
+      const timerId = window.setTimeout(() => {
+        pendingMessageSaveTimersRef.current.delete(key);
+        const latestPayload = pendingMessageSavePayloadsRef.current.get(key);
+        pendingMessageSavePayloadsRef.current.delete(key);
+        if (latestPayload) {
+          enqueueMessageSaveNow(latestPayload);
+        }
+      }, STREAM_MESSAGE_SAVE_THROTTLE_MS);
+
+      pendingMessageSaveTimersRef.current.set(key, timerId);
+    },
+    [enqueueMessageSaveNow],
+  );
+
   useEffect(() => {
     if (!hasLoadedConversations) return;
 
+    const previousById = new Map(
+      previousPersistedConversationsRef.current.map((conversation) => [conversation.id, conversation]),
+    );
+
     conversations.forEach((conversation) => {
-      void saveConversation(conversation).catch((error) => {
-        console.error("Failed to save conversation to SQLite", error);
+      const previousConversation = previousById.get(conversation.id);
+
+      if (!previousConversation) {
+        enqueueConversationSave(conversation);
+        return;
+      }
+
+      if (hasExistingMessageStructureChanged(previousConversation, conversation)) {
+        enqueueConversationSave(conversation);
+        return;
+      }
+
+      if (hasConversationMetaChanged(previousConversation, conversation)) {
+        enqueueConversationMetaSave(conversation);
+      }
+
+      if (conversation.messages.length > previousConversation.messages.length) {
+        if (hasNewMessageStructureIssue(previousConversation, conversation)) {
+          enqueueConversationSave(conversation);
+          return;
+        }
+
+        enqueueMessagesUpsert({
+          conversationId: conversation.id,
+          messages: conversation.messages.slice(previousConversation.messages.length),
+          positionOffset: previousConversation.messages.length,
+        });
+      }
+
+      conversation.messages.slice(0, previousConversation.messages.length).forEach((message, index) => {
+        const previousMessage = previousConversation.messages[index];
+        if (!previousMessage) return;
+
+        const persistenceMode = getMessagePersistenceMode(previousMessage, message);
+        if (persistenceMode === "none") return;
+
+        enqueueMessageSave(
+          {
+            conversationId: conversation.id,
+            message,
+          },
+          persistenceMode,
+        );
       });
     });
-  }, [conversations, hasLoadedConversations]);
+
+    previousPersistedConversationsRef.current = conversations;
+  }, [
+    conversations,
+    enqueueConversationSave,
+    enqueueConversationMetaSave,
+    enqueueMessageSave,
+    enqueueMessagesUpsert,
+    hasLoadedConversations,
+  ]);
 
   useEffect(() => {
     if (!hasLoadedComposerDrafts) return;
@@ -738,6 +632,7 @@ export function App() {
     if (removedConversationIds.length === 0) return;
 
     removedConversationIds.forEach((conversationId) => {
+      deletedConversationIdsRef.current.add(conversationId);
       void deleteStoredComposerDraft(conversationId).catch((error) => {
         console.error("Failed to delete removed project conversation draft from SQLite", error);
       });
@@ -767,6 +662,7 @@ export function App() {
     });
 
     if (activeConversationId && removedConversationIds.includes(activeConversationId)) {
+      activeConversationIdRef.current = null;
       setActiveConversationId(null);
       setWorkspaceView("newConversation");
     }
@@ -830,6 +726,7 @@ export function App() {
         updatedAt: Date.now(),
       },
     }));
+    activeConversationIdRef.current = null;
     setActiveConversationId(null);
     setWorkspaceView("newConversation");
   }, []);
@@ -839,7 +736,9 @@ export function App() {
       conversationId: string,
       messageId: string,
       updater: (message: ChatMessage) => ChatMessage,
+      options: { touchConversation?: boolean } = {},
     ) => {
+      const timestamp = Date.now();
       setConversations((currentConversations) =>
         currentConversations.map((conversation) =>
           conversation.id === conversationId
@@ -848,7 +747,7 @@ export function App() {
                 messages: conversation.messages.map((message) =>
                   message.id === messageId ? updater(message) : message,
                 ),
-                updatedAt: Date.now(),
+                updatedAt: options.touchConversation ? timestamp : conversation.updatedAt,
               }
             : conversation,
         ),
@@ -859,8 +758,11 @@ export function App() {
 
   const applyAgentOutputToMessage = useCallback(
     (conversationId: string, messageId: string, output: AgentChatOutput) => {
-      updateAssistantMessage(conversationId, messageId, (message) =>
-        applyAgentOutputToChatMessage(message, output),
+      updateAssistantMessage(
+        conversationId,
+        messageId,
+        (message) => applyAgentOutputToChatMessage(message, output),
+        { touchConversation: output.status !== "running" && output.status !== "idle" },
       );
 
       if (output.status !== "waiting_for_approval") {
@@ -870,10 +772,42 @@ export function App() {
     [cleanupRunBinding, updateAssistantMessage],
   );
 
+  const updateMessageUiState = useCallback(
+    (messageId: string, uiState: ChatMessageUiState | undefined) => {
+      if (!activeConversationIdRef.current) return;
+
+      const conversationId = activeConversationIdRef.current;
+      setConversations((currentConversations) =>
+        currentConversations.map((conversation) =>
+          conversation.id === conversationId
+            ? {
+                ...conversation,
+                messages: conversation.messages.map((message) =>
+                  message.id === messageId
+                    ? {
+                        ...message,
+                        uiState,
+                      }
+                    : message,
+                ),
+              }
+            : conversation,
+        ),
+      );
+    },
+    [],
+  );
+
   const applyAgentExecutionToMessage = useCallback(
     (conversationId: string, messageId: string, execution: AgentActionExecutionOutput) => {
-      updateAssistantMessage(conversationId, messageId, (message) =>
-        applyAgentActionExecutionToChatMessage(message, execution),
+      updateAssistantMessage(
+        conversationId,
+        messageId,
+        (message) => applyAgentActionExecutionToChatMessage(message, execution),
+        {
+          touchConversation:
+            execution.agentOutput.status !== "running" && execution.agentOutput.status !== "idle",
+        },
       );
 
       if (execution.agentOutput.status !== "waiting_for_approval") {
@@ -888,11 +822,28 @@ export function App() {
       if (agentEvent.runId && cancelledRunIdsRef.current.has(agentEvent.runId)) return;
       if (cancelledPendingMessageIdsRef.current.has(pendingMessageId)) return;
 
-      updateAssistantMessage(conversationId, pendingMessageId, (message) =>
-        applyAgentEventToChatMessage(message, agentEvent),
+      updateAssistantMessage(
+        conversationId,
+        pendingMessageId,
+        (message) => applyAgentEventToChatMessage(message, agentEvent),
+        { touchConversation: shouldTouchConversationForAgentEvent(agentEvent) },
       );
 
       if (agentEvent.type === "done") {
+        if (agentEvent.success && agentEvent.status !== "waiting_for_approval") {
+          const completedAt = Date.now();
+          setConversations((currentConversations) =>
+            currentConversations.map((conversation) =>
+              conversation.id === conversationId && activeConversationIdRef.current !== conversationId
+                ? {
+                    ...conversation,
+                    unreadAt: completedAt,
+                  }
+                : conversation,
+            ),
+          );
+        }
+
         cleanupRunBinding(agentEvent.runId);
       }
 
@@ -953,7 +904,7 @@ export function App() {
         assistantMessageId: pendingMessageId,
         content,
         conversationId,
-        maxTokens: 1024,
+        maxTokens: DEFAULT_AGENT_MAX_TOKENS,
         modelId,
         projectId,
         userMessageId,
@@ -1009,7 +960,7 @@ export function App() {
 
                     return message;
                   }),
-                  updatedAt: Date.now(),
+                  updatedAt: conversation.updatedAt,
                 }
               : conversation,
           ),
@@ -1027,6 +978,9 @@ export function App() {
           setActiveConversationId((currentActiveConversationId) =>
             currentActiveConversationId === conversationId ? resolvedConversationId : currentActiveConversationId,
           );
+          if (activeConversationIdRef.current === conversationId) {
+            activeConversationIdRef.current = resolvedConversationId;
+          }
         }
 
         activeRunBindingsRef.current.set(startOutput.runId, {
@@ -1045,15 +999,20 @@ export function App() {
           return;
         }
 
-        updateAssistantMessage(conversationId, pendingMessageId, (message) => ({
-          ...message,
-          content: getErrorMessage(error),
-          status: "error",
-          agentRun: {
-            ...ensureAgentRun(message.agentRun, null, "failed"),
-            error: getErrorMessage(error),
-          },
-        }));
+        updateAssistantMessage(
+          conversationId,
+          pendingMessageId,
+          (message) => ({
+            ...message,
+            content: getErrorMessage(error),
+            status: "error",
+            agentRun: {
+              ...ensureAgentRun(message.agentRun, null, "failed"),
+              error: getErrorMessage(error),
+            },
+          }),
+          { touchConversation: true },
+        );
       }
     },
     [handleAgentEvent, updateAssistantMessage],
@@ -1063,7 +1022,7 @@ export function App() {
     (content: string, options: ChatSubmitOptions) => {
       const now = Date.now();
       const title = createConversationTitle(content);
-      const userMessage = createUserMessage(content);
+      const userMessage = createUserMessage(content, options.attachments);
       const pendingMessage = createAssistantMessage("正在思考...", "pending");
       const conversation: ChatConversation = {
         id: createId("conversation"),
@@ -1075,6 +1034,7 @@ export function App() {
         updatedAt: now,
         pinnedAt: null,
         archivedAt: null,
+        unreadAt: null,
       };
 
       setConversations((currentConversations) => [conversation, ...currentConversations]);
@@ -1096,6 +1056,7 @@ export function App() {
           updatedAt: now,
         }),
       }));
+      activeConversationIdRef.current = conversation.id;
       setActiveConversationId(conversation.id);
       setNewConversationProjectId(null);
       setWorkspaceView("conversation");
@@ -1126,7 +1087,7 @@ export function App() {
         return;
       }
 
-      const userMessage = createUserMessage(content);
+      const userMessage = createUserMessage(content, options.attachments);
       const pendingMessage = createAssistantMessage("正在思考...", "pending");
       const now = Date.now();
 
@@ -1157,6 +1118,17 @@ export function App() {
   );
 
   const selectConversation = useCallback((conversationId: string) => {
+    setConversations((currentConversations) =>
+      currentConversations.map((conversation) =>
+        conversation.id === conversationId && conversation.unreadAt
+          ? {
+              ...conversation,
+              unreadAt: null,
+            }
+          : conversation,
+      ),
+    );
+    activeConversationIdRef.current = conversationId;
     setActiveConversationId(conversationId);
     setWorkspaceView("conversation");
   }, []);
@@ -1176,6 +1148,43 @@ export function App() {
     );
   }, []);
 
+  const renameConversation = useCallback((conversationId: string, title: string) => {
+    setConversations((currentConversations) =>
+      currentConversations.map((conversation) =>
+        conversation.id === conversationId
+          ? {
+              ...conversation,
+              title,
+            }
+          : conversation,
+      ),
+    );
+  }, []);
+
+  const markConversationUnread = useCallback(
+    (conversationId: string) => {
+      if (conversationId === activeConversationIdRef.current) return;
+
+      const now = Date.now();
+      setConversations((currentConversations) =>
+        currentConversations.map((conversation) => {
+          if (conversation.id !== conversationId || conversation.unreadAt) return conversation;
+
+          const isPending = conversation.messages.some(
+            (message) => message.role === "assistant" && message.status === "pending",
+          );
+          if (isPending) return conversation;
+
+          return {
+            ...conversation,
+            unreadAt: now,
+          };
+        }),
+      );
+    },
+    [],
+  );
+
   const archiveConversation = useCallback(
     (conversationId: string) => {
       const now = Date.now();
@@ -1192,6 +1201,7 @@ export function App() {
       );
 
       if (activeConversationId === conversationId) {
+        activeConversationIdRef.current = null;
         setActiveConversationId(null);
         setWorkspaceView("newConversation");
       }
@@ -1220,6 +1230,7 @@ export function App() {
       );
 
       if (activeConversationId && archivedConversationIds.includes(activeConversationId)) {
+        activeConversationIdRef.current = null;
         setActiveConversationId(null);
         setWorkspaceView("newConversation");
       }
@@ -1247,6 +1258,7 @@ export function App() {
       activeConversationSnapshot?.projectId &&
       projectIds.has(activeConversationSnapshot.projectId)
     ) {
+      activeConversationIdRef.current = null;
       setActiveConversationId(null);
       setWorkspaceView("newConversation");
     }
@@ -1272,6 +1284,7 @@ export function App() {
       activeConversationSnapshot &&
       (!activeConversationSnapshot.projectId || !projectIds.has(activeConversationSnapshot.projectId))
     ) {
+      activeConversationIdRef.current = null;
       setActiveConversationId(null);
       setWorkspaceView("newConversation");
     }
@@ -1292,6 +1305,7 @@ export function App() {
 
   const deleteConversation = useCallback(
     (conversationId: string) => {
+      deletedConversationIdsRef.current.add(conversationId);
       setConversations((currentConversations) =>
         currentConversations.filter((conversation) => conversation.id !== conversationId),
       );
@@ -1309,6 +1323,7 @@ export function App() {
       });
 
       if (activeConversationId === conversationId) {
+        activeConversationIdRef.current = null;
         setActiveConversationId(null);
         setWorkspaceView("newConversation");
       }
@@ -1322,6 +1337,10 @@ export function App() {
       .map((conversation) => conversation.id);
 
     if (archivedConversationIds.length === 0) return;
+
+    archivedConversationIds.forEach((conversationId) => {
+      deletedConversationIdsRef.current.add(conversationId);
+    });
 
     setConversations((currentConversations) =>
       currentConversations.filter((conversation) => !conversation.archivedAt),
@@ -1344,6 +1363,7 @@ export function App() {
     });
 
     if (activeConversationId && archivedConversationIds.includes(activeConversationId)) {
+      activeConversationIdRef.current = null;
       setActiveConversationId(null);
       setWorkspaceView("newConversation");
     }
@@ -1410,23 +1430,28 @@ export function App() {
         const execution = await approveAgentAction(getAgentActionId(action));
         applyAgentExecutionToMessage(activeConversationId, messageId, execution);
       } catch (error) {
-        updateAssistantMessage(activeConversationId, messageId, (message) => {
-          const currentRun = ensureAgentRun(message.agentRun, null, "failed");
+        updateAssistantMessage(
+          activeConversationId,
+          messageId,
+          (message) => {
+            const currentRun = ensureAgentRun(message.agentRun, null, "failed");
 
-          return {
-            ...message,
-            status: "error",
-            agentRun: {
-              ...currentRun,
-              error: getErrorMessage(error),
-              timeline: appendTimelineItem(currentRun, {
-                id: `error-${currentRun.timeline.length + 1}`,
-                type: "error",
-                message: getErrorMessage(error),
-              }),
-            },
-          };
-        });
+            return {
+              ...message,
+              status: "error",
+              agentRun: {
+                ...currentRun,
+                error: getErrorMessage(error),
+                timeline: appendTimelineItem(currentRun, {
+                  id: `error-${currentRun.timeline.length + 1}`,
+                  type: "error",
+                  message: getErrorMessage(error),
+                }),
+              },
+            };
+          },
+          { touchConversation: true },
+        );
       }
     },
     [activeConversationId, applyAgentExecutionToMessage, updateAssistantMessage],
@@ -1440,23 +1465,28 @@ export function App() {
         const execution = await rejectAgentAction(getAgentActionId(action));
         applyAgentExecutionToMessage(activeConversationId, messageId, execution);
       } catch (error) {
-        updateAssistantMessage(activeConversationId, messageId, (message) => {
-          const currentRun = ensureAgentRun(message.agentRun, null, "failed");
+        updateAssistantMessage(
+          activeConversationId,
+          messageId,
+          (message) => {
+            const currentRun = ensureAgentRun(message.agentRun, null, "failed");
 
-          return {
-            ...message,
-            status: "error",
-            agentRun: {
-              ...currentRun,
-              error: getErrorMessage(error),
-              timeline: appendTimelineItem(currentRun, {
-                id: `error-${currentRun.timeline.length + 1}`,
-                type: "error",
-                message: getErrorMessage(error),
-              }),
-            },
-          };
-        });
+            return {
+              ...message,
+              status: "error",
+              agentRun: {
+                ...currentRun,
+                error: getErrorMessage(error),
+                timeline: appendTimelineItem(currentRun, {
+                  id: `error-${currentRun.timeline.length + 1}`,
+                  type: "error",
+                  message: getErrorMessage(error),
+                }),
+              },
+            };
+          },
+          { touchConversation: true },
+        );
       }
     },
     [activeConversationId, applyAgentExecutionToMessage, updateAssistantMessage],
@@ -1468,41 +1498,51 @@ export function App() {
 
       try {
         await cancelAgentAction(getAgentActionId(action));
-        updateAssistantMessage(activeConversationId, messageId, (message) => {
-          const currentRun = ensureAgentRun(message.agentRun, null, "cancelled");
+        updateAssistantMessage(
+          activeConversationId,
+          messageId,
+          (message) => {
+            const currentRun = ensureAgentRun(message.agentRun, null, "cancelled");
 
-          return {
-            ...message,
-            status: "sent",
-            agentRun: {
-              ...currentRun,
-              status: "cancelled",
-              timeline: appendTimelineItem(currentRun, {
-                id: `cancel-${getAgentActionId(action)}`,
-                type: "error",
-                message: "已取消该操作。",
-              }),
-            },
-          };
-        });
+            return {
+              ...message,
+              status: "sent",
+              agentRun: {
+                ...currentRun,
+                status: "cancelled",
+                timeline: appendTimelineItem(currentRun, {
+                  id: `cancel-${getAgentActionId(action)}`,
+                  type: "error",
+                  message: "已取消该操作。",
+                }),
+              },
+            };
+          },
+          { touchConversation: true },
+        );
       } catch (error) {
-        updateAssistantMessage(activeConversationId, messageId, (message) => {
-          const currentRun = ensureAgentRun(message.agentRun, null, "failed");
+        updateAssistantMessage(
+          activeConversationId,
+          messageId,
+          (message) => {
+            const currentRun = ensureAgentRun(message.agentRun, null, "failed");
 
-          return {
-            ...message,
-            status: "error",
-            agentRun: {
-              ...currentRun,
-              error: getErrorMessage(error),
-              timeline: appendTimelineItem(currentRun, {
-                id: `error-${currentRun.timeline.length + 1}`,
-                type: "error",
-                message: getErrorMessage(error),
-              }),
-            },
-          };
-        });
+            return {
+              ...message,
+              status: "error",
+              agentRun: {
+                ...currentRun,
+                error: getErrorMessage(error),
+                timeline: appendTimelineItem(currentRun, {
+                  id: `error-${currentRun.timeline.length + 1}`,
+                  type: "error",
+                  message: getErrorMessage(error),
+                }),
+              },
+            };
+          },
+          { touchConversation: true },
+        );
       }
     },
     [activeConversationId, updateAssistantMessage],
@@ -1545,9 +1585,11 @@ export function App() {
           onArchiveAllRootConversations={archiveAllRootConversations}
           onArchiveConversation={archiveConversation}
           onArchiveProjectConversations={archiveProjectConversations}
+          onMarkConversationUnread={markConversationUnread}
           onNewConversation={startNewConversation}
           onOpenSettings={() => setView("settings")}
           onRemoveProject={deleteProject}
+          onRenameConversation={renameConversation}
           onRenameProject={renameProject}
           onShowProjectInFolder={handleShowProjectInFolder}
           onSelectConversation={selectConversation}
@@ -1573,7 +1615,7 @@ export function App() {
             aria-pressed={leftOpen}
             onClick={() => setLeftOpen((value) => !value)}
           >
-            {leftOpen ? <PanelLeftClose /> : <PanelLeftOpen />}
+            <SidebarToggleIcon open={leftOpen} side="left" />
           </button>
 
           <button
@@ -1583,7 +1625,7 @@ export function App() {
             aria-pressed={rightOpen}
             onClick={() => setRightOpen((value) => !value)}
           >
-            {rightOpen ? <PanelRightClose /> : <PanelRightOpen />}
+            <SidebarToggleIcon open={rightOpen} side="right" />
           </button>
 
           {toolbarTitle && <h1 className="main-panel__title">{toolbarTitle}</h1>}
@@ -1605,6 +1647,7 @@ export function App() {
               onCancelAgentAction={handleCancelAgentAction}
               onComposerDraftChange={(draft) => updateComposerDraft(activeConversation.id, draft)}
               onRejectAgentAction={handleRejectAgentAction}
+              onMessageUiStateChange={updateMessageUiState}
               onStopGenerating={stopActiveGeneration}
               onSubmitMessage={appendMessageToActiveConversation}
             />

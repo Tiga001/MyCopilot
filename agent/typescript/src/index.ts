@@ -20,6 +20,7 @@ export type {
   AgentCommandRequest,
   AgentCommandRiskLevel,
   AgentConversationMessage,
+  AgentConversationMessageAttachment,
   AgentConversationTurnInput,
   AgentConversationTurnOutput,
   AgentDiffProposal,

@@ -77,66 +77,135 @@
 
 .chat-composer__attachments {
   display: flex;
-  flex-wrap: wrap;
   min-width: 0;
-  margin: 8px 0 0;
-  gap: 8px;
+  max-width: 100%;
+  margin: 0 0 16px;
+  padding: 0 2px 2px;
+  gap: 12px;
+  overflow-x: auto;
+  overflow-y: visible;
+  scrollbar-width: thin;
 }
 
 .composer-attachment {
-  display: inline-grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  position: relative;
+  display: grid;
+  flex: 0 0 auto;
   align-items: center;
-  max-width: min(100%, 230px);
-  height: 42px;
-  padding: 4px 6px 4px 8px;
-  gap: 8px;
-  color: var(--mc-color-text-secondary);
-  background: var(--mc-color-surface-muted);
+  color: var(--mc-color-text-primary);
+  background: var(--mc-color-surface-elevated);
   border: 1px solid var(--mc-color-border-subtle);
+  box-shadow: var(--mc-shadow-none);
+}
+
+.composer-attachment[data-kind="file"] {
+  grid-template-columns: auto minmax(0, 1fr);
+  width: 244px;
+  height: 72px;
+  padding: 12px 36px 12px 12px;
+  gap: 14px;
   border-radius: var(--mc-radius-2xl);
 }
 
-.composer-attachment img {
-  width: 30px;
-  height: 30px;
-  border-radius: var(--mc-radius-sm);
+.composer-attachment[data-kind="image"] {
+  width: 118px;
+  height: 126px;
+  overflow: hidden;
+  place-items: stretch;
+  border-radius: var(--mc-radius-2xl);
+}
+
+.composer-attachment__thumbnail {
+  width: 100%;
+  height: 100%;
+  display: block;
   object-fit: cover;
 }
 
-.composer-attachment > svg {
-  width: var(--mc-icon-size-3xl);
-  height: var(--mc-icon-size-3xl);
-  color: var(--mc-color-icon-muted);
+.composer-attachment__icon {
+  display: grid;
+  width: 54px;
+  height: 54px;
+  place-items: center;
+  color: var(--mc-color-text-secondary);
+  background: var(--mc-color-surface-muted);
+  border-radius: var(--mc-radius-lg);
 }
 
-.composer-attachment span {
+.composer-attachment__icon svg {
+  width: var(--mc-icon-size-4xl);
+  height: var(--mc-icon-size-4xl);
+  color: var(--mc-color-icon-muted);
+  stroke-width: var(--mc-icon-stroke-medium);
+}
+
+.composer-attachment__language-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  height: 28px;
+  padding: 0 5px;
+  color: var(--mc-color-icon-muted);
+  font-family: var(--mc-mono-font-family);
+  font-size: var(--mc-font-size-code);
+  font-weight: var(--mc-font-weight-heavy);
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.composer-attachment__details {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.composer-attachment__name,
+.composer-attachment__type {
   overflow: hidden;
-  font-size: var(--mc-font-size-xs);
-  font-weight: var(--mc-font-weight-bold);
-  line-height: var(--mc-line-height-none);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.composer-attachment button {
+.composer-attachment__name {
+  color: var(--mc-color-text-primary);
+  font-size: var(--mc-font-size-xl);
+  font-weight: var(--mc-font-weight-strong);
+  line-height: var(--mc-line-height-tight);
+}
+
+.composer-attachment__type {
+  color: var(--mc-color-text-muted);
+  font-size: var(--mc-font-size-lg);
+  font-weight: var(--mc-font-weight-medium);
+  line-height: var(--mc-line-height-none);
+}
+
+.composer-attachment__remove {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  z-index: 2;
   display: grid;
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   padding: 0;
   place-items: center;
-  color: var(--mc-color-icon-subtle);
-  background: transparent;
-  border-radius: var(--mc-radius-xs);
+  color: var(--mc-color-text-inverse);
+  background: var(--mc-color-text-primary);
+  border: 0;
+  border-radius: var(--mc-radius-pill);
+  box-shadow: var(--mc-shadow-card);
 }
 
-.composer-attachment button:hover {
-  background: var(--mc-color-state-hover);
+.composer-attachment__remove:hover {
+  filter: brightness(1.08);
 }
 
-.composer-attachment button svg {
-  width: var(--mc-icon-size-xs);
-  height: var(--mc-icon-size-xs);
+.composer-attachment__remove svg {
+  width: var(--mc-icon-size-base);
+  height: var(--mc-icon-size-base);
+  stroke-width: var(--mc-icon-stroke-medium);
 }
 
 .chat-composer__warning {
@@ -382,7 +451,6 @@
 .composer-project-option,
 .composer-project-command {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   min-height: 42px;
   padding: 0 4px;
@@ -395,6 +463,14 @@
   font: inherit;
   font-size: var(--mc-font-size-xl);
   cursor: pointer;
+}
+
+.composer-project-option {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.composer-project-command {
+  grid-template-columns: auto minmax(0, 1fr);
 }
 
 .composer-project-option:hover,

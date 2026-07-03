@@ -68,6 +68,17 @@ export interface AgentInputAttachment {
   truncated?: boolean;
 }
 
+export interface AgentConversationMessageAttachment {
+  id: string;
+  kind: AgentInputAttachmentKind;
+  name: string;
+  mimeType?: string | null;
+  sizeBytes: number;
+  previewData?: string | null;
+  previewMimeType?: string | null;
+  createdAt?: number;
+}
+
 export interface AgentWorkspaceContext {
   projectId?: string;
   displayName?: string;
@@ -151,6 +162,7 @@ export interface AgentConversationMessage {
   content: string;
   createdAt: number;
   status?: "pending" | "sent" | "error" | null;
+  attachments?: AgentConversationMessageAttachment[];
 }
 
 export interface AgentConversationTurnOutput {
