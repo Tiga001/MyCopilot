@@ -45,7 +45,22 @@ function formatMessageTime(timestamp: number | undefined) {
   if (!timestamp) return "";
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) return "";
-  return `${date.getHours()}:${date.getMinutes().toString().padStart(2, "0")}`;
+
+  const time = `${date.getHours()}:${date.getMinutes().toString().padStart(2, "0")}`;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const messageDay = new Date(date);
+  messageDay.setHours(0, 0, 0, 0);
+
+  const dayDistance = Math.floor((today.getTime() - messageDay.getTime()) / 86_400_000);
+  if (dayDistance <= 0) return time;
+  if (dayDistance === 1) return `昨天 ${time}`;
+  if (dayDistance <= 7) {
+    return `${new Intl.DateTimeFormat("zh-CN", { weekday: "long" }).format(date)} ${time}`;
+  }
+
+  return `${date.getMonth() + 1}月${date.getDate()}日 ${time}`;
 }
 
 async function copyTextToClipboard(content: string) {
