@@ -2,13 +2,14 @@ use crate::llm::{
     complete_chat, complete_chat_streaming, detect_api_style, LlmChatRequest, LlmImage, LlmMessage,
     LlmMessageRole, LlmToolCall,
 };
+use crate::prompts::build_system_prompt;
 use crate::protocol::{
     AgentApprovalDecision, AgentApprovalDecisionStatus, AgentApprovalStatus, AgentChatInput,
     AgentChatMessage, AgentChatOutput, AgentCommandRiskLevel, AgentError, AgentEvent,
     AgentInputAttachment, AgentInputAttachmentEncoding, AgentInputAttachmentKind,
-    AgentProposedAction, AgentResult, AgentRunContext, AgentRunMode, AgentRunStatus,
-    AgentStateSnapshot, AgentToolCall, AgentToolDefinition, AgentToolResult, AgentUsage,
-    AgentWorkspaceContext,
+    AgentPromptPreferences, AgentProposedAction, AgentResult, AgentRunContext, AgentRunMode,
+    AgentRunStatus, AgentStateSnapshot, AgentToolCall, AgentToolDefinition, AgentToolResult,
+    AgentUsage, AgentWorkspaceContext,
 };
 use crate::tools::{ToolExecutionContext, ToolRegistry};
 use base64::Engine;
@@ -313,6 +314,7 @@ fn build_llm_request(
         attachment_context,
         mode,
         input.context.as_ref(),
+        input.prompt_preferences.as_ref(),
         input.approval_decision.as_ref(),
         tool_definitions,
     )?;
@@ -335,6 +337,7 @@ fn build_runtime_messages(
     attachment_context: AttachmentContext,
     mode: AgentRunMode,
     context: Option<&AgentRunContext>,
+    prompt_preferences: Option<&AgentPromptPreferences>,
     approval_decision: Option<&AgentApprovalDecision>,
     tool_definitions: &[AgentToolDefinition],
 ) -> AgentResult<Vec<LlmMessage>> {
@@ -366,7 +369,7 @@ fn build_runtime_messages(
         0,
         LlmMessage::text(
             LlmMessageRole::System,
-            build_system_prompt(mode, context, tool_definitions),
+            build_system_prompt(mode, context, prompt_preferences, tool_definitions),
         ),
     );
 
@@ -775,85 +778,6 @@ fn attachment_extension(name: &str) -> String {
         .unwrap_or_default()
 }
 
-fn build_system_prompt(
-    mode: AgentRunMode,
-    context: Option<&AgentRunContext>,
-    tool_definitions: &[AgentToolDefinition],
-) -> String {
-    let mode_label = match mode {
-        AgentRunMode::Chat => "chat",
-        AgentRunMode::Plan => "plan",
-        AgentRunMode::Edit => "edit",
-    };
-    let workspace = context
-        .and_then(|context| context.workspace.as_ref())
-        .filter(|workspace| {
-            workspace
-                .root_path
-                .as_deref()
-                .map(str::trim)
-                .is_some_and(|root_path| !root_path.is_empty())
-        });
-    let workspace_note = if let Some(workspace) = workspace {
-        let display_name = workspace
-            .display_name
-            .as_deref()
-            .map(str::trim)
-            .filter(|name| !name.is_empty())
-            .unwrap_or("当前项目");
-        format!(
-            "当前已有用户选择的工作区：{display_name}。不要假装已经读取文件；只有在后续工具结果提供文件内容后，才能声称了解具体文件。涉及文件时优先使用 workspace 相对路径。"
-        )
-    } else {
-        "当前没有可用的工作区上下文。需要文件内容时，先说明需要用户选择已绑定本地路径的项目。"
-            .to_string()
-    };
-    let attachment_note = context
-        .and_then(|context| context.attachment_library.as_ref())
-        .map(|library| {
-            format!(
-                "当前对话附件库使用虚拟路径 @attachments。对话附件数量：{}；当前项目附件数量：{}。需要查看附件时，先用 attachments_list 或 attachments_list_project 获取 readPath；图片用 read_image，文本或文档用 read_file/read_pdf/read_word/read_presentation/read_spreadsheet。不要把 @attachments 当作 workspace 路径，也不要臆造真实本地路径。",
-                library.conversation_attachments.len(),
-                library.project_attachments.len()
-            )
-        })
-        .unwrap_or_else(|| {
-            "当前没有可用的附件库上下文。若用户提到历史附件但工具列表为空，需要说明无法访问。".to_string()
-        });
-    let tools = format_tool_definitions(tool_definitions);
-
-    format!(
-        "你是 MyCopilot 的后端 coding agent，运行模式是 {mode_label}。\n\
-        {workspace_note}\n\
-        {attachment_note}\n\
-        你可以通过模型 API 的原生 tool/function calling 使用下列工具理解用户已选择的 workspace、公开网页信息，或请求用户批准危险动作：\n\
-        {tools}\n\
-        如果需要调用工具，必须使用原生 tool/function calling，不要手写 JSON tool_call 文本。\n\
-        工具返回后你会收到 tool result，然后再继续推理并给出最终回答。\n\
-        对 requiresApproval=true 的工具，只能提出请求；用户批准前不能声称已经执行。\n\
-        如果收到 approval_decision observation，必须遵守用户的拒绝理由或改法要求，不要重复提出完全相同的请求。\n\
-        你可以解释代码、制定计划、提出补丁或命令，但不能声称已经执行文件读写、命令、Git 操作或安装依赖。\n\
-        任何写文件、应用 patch、运行命令、安装依赖、Git 修改类操作，都必须作为待确认动作交给 Tauri/Rust 层执行。\n\
-        回答要直接、可执行；如果提出修改，优先用清晰的 diff/patch 或分步骤计划表达。"
-    )
-}
-
-fn format_tool_definitions(tool_definitions: &[AgentToolDefinition]) -> String {
-    tool_definitions
-        .iter()
-        .map(|definition| {
-            format!(
-                "- {}: {} requiresWorkspace={} requiresApproval={}",
-                definition.name,
-                definition.description,
-                definition.requires_workspace,
-                definition.requires_approval
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 #[derive(Debug)]
 struct ToolCallRequest {
     tool: String,
@@ -1260,6 +1184,7 @@ mod tests {
             AgentRunMode::Chat,
             Some(&context),
             None,
+            None,
             &ToolRegistry::read_only_defaults_with_search(None).definitions(),
         )
         .unwrap();
@@ -1282,6 +1207,7 @@ mod tests {
             empty_attachment_context(),
             AgentRunMode::Chat,
             None,
+            None,
             Some(&decision),
             &ToolRegistry::read_only_defaults_with_search(None).definitions(),
         )
@@ -1303,6 +1229,7 @@ mod tests {
                 images: Vec::new(),
             },
             AgentRunMode::Chat,
+            None,
             None,
             None,
             &ToolRegistry::read_only_defaults_with_search(None).definitions(),

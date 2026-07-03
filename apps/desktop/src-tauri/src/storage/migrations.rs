@@ -99,6 +99,15 @@ pub fn run_migrations(connection: &Connection) -> rusqlite::Result<()> {
             sidebar_section_order TEXT NOT NULL,
             updated_at INTEGER NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS agent_prompt_preferences (
+            id TEXT PRIMARY KEY CHECK (id = 'default'),
+            work_mode TEXT NOT NULL,
+            tone TEXT NOT NULL,
+            detail_level TEXT NOT NULL,
+            custom_instructions TEXT NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
         ",
     )?;
 
@@ -111,6 +120,36 @@ pub fn run_migrations(connection: &Connection) -> rusqlite::Result<()> {
         "ui_preferences",
         "sidebar_project_order_json",
         "TEXT NOT NULL DEFAULT '[]'",
+    )?;
+    add_column_if_missing(
+        connection,
+        "ui_preferences",
+        "translucent_sidebar",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    add_column_if_missing(
+        connection,
+        "ui_preferences",
+        "native_font_smoothing",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    add_column_if_missing(
+        connection,
+        "ui_preferences",
+        "profile_display_name",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    add_column_if_missing(
+        connection,
+        "ui_preferences",
+        "profile_handle",
+        "TEXT NOT NULL DEFAULT 'USER'",
+    )?;
+    add_column_if_missing(
+        connection,
+        "ui_preferences",
+        "profile_avatar_data_url",
+        "TEXT",
     )?;
 
     connection.execute_batch(

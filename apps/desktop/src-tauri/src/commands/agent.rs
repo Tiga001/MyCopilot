@@ -2,18 +2,19 @@ use crate::agent_actions::pending::action_id;
 use crate::agent_actions::AgentActionState;
 use crate::fs::canonical_workspace_root;
 use crate::storage::models::{
-    AttachmentRecord, ChatConversationRecord, ChatMessageAttachmentRecord, ChatMessageRecord,
-    ProjectRecord,
+    AgentPromptPreferencesRecord, AttachmentRecord, ChatConversationRecord,
+    ChatMessageAttachmentRecord, ChatMessageRecord, ProjectRecord,
 };
 use crate::storage::{
-    attachment_repository, chat_repository, config_repository, now_ms, project_repository,
-    storage_error, StorageState,
+    agent_prompt_preferences_repository, attachment_repository, chat_repository, config_repository,
+    now_ms, project_repository, storage_error, StorageState,
 };
 use base64::Engine;
 use my_copilot_agent::{
     next_run_id, send_chat_with_events, AgentAttachmentLibraryContext, AgentAttachmentReference,
     AgentChatInput, AgentChatMessage, AgentEvent, AgentEventEmitter, AgentInputAttachment,
-    AgentInputAttachmentEncoding, AgentInputAttachmentKind, AgentRunContext, AgentRunMode,
+    AgentInputAttachmentEncoding, AgentInputAttachmentKind, AgentPromptDetailLevel,
+    AgentPromptPreferences, AgentPromptTone, AgentPromptWorkMode, AgentRunContext, AgentRunMode,
     AgentRunStatus, AgentSearchConfig, AgentSearchMode, AgentWorkspaceContext,
 };
 use rusqlite::Connection;
@@ -44,6 +45,7 @@ pub struct AgentConversationTurnInput {
     pub max_tokens: Option<u32>,
     pub temperature: Option<f32>,
     pub mode: Option<AgentRunMode>,
+    pub prompt_preferences: Option<AgentPromptPreferences>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -166,6 +168,14 @@ fn prepare_conversation_turn(
     if !model.enabled {
         return Err(format!("模型未启用：{model_id}"));
     }
+    let prompt_preferences = if let Some(preferences) = input.prompt_preferences.clone() {
+        preferences
+    } else {
+        let preferences =
+            agent_prompt_preferences_repository::load_agent_prompt_preferences(&connection)
+                .map_err(storage_error)?;
+        agent_prompt_preferences_from_record(preferences)
+    };
 
     let timestamp = now_ms();
     let conversation_id = input
@@ -314,6 +324,7 @@ fn prepare_conversation_turn(
             },
             tavily_api_key: non_empty(settings.tavily_api_key),
         }),
+        prompt_preferences: Some(prompt_preferences),
         approval_decision: None,
         attachments: input.attachments,
         messages: agent_messages,
@@ -483,6 +494,37 @@ fn agent_attachment_kind(kind: &str) -> AgentInputAttachmentKind {
     match kind {
         "image" => AgentInputAttachmentKind::Image,
         _ => AgentInputAttachmentKind::File,
+    }
+}
+
+fn agent_prompt_preferences_from_record(
+    record: AgentPromptPreferencesRecord,
+) -> AgentPromptPreferences {
+    AgentPromptPreferences {
+        work_mode: Some(match record.work_mode.as_str() {
+            "general" => AgentPromptWorkMode::General,
+            _ => AgentPromptWorkMode::Coding,
+        }),
+        tone: Some(match record.tone.as_str() {
+            "friendly" => AgentPromptTone::Friendly,
+            _ => AgentPromptTone::Pragmatic,
+        }),
+        detail_level: Some(match record.detail_level.as_str() {
+            "low" => AgentPromptDetailLevel::Low,
+            "high" => AgentPromptDetailLevel::High,
+            _ => AgentPromptDetailLevel::Medium,
+        }),
+        custom_instructions: normalize_prompt_custom_instructions(&record.custom_instructions),
+        updated_at: Some(record.updated_at),
+    }
+}
+
+fn normalize_prompt_custom_instructions(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
     }
 }
 

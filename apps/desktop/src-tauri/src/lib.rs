@@ -30,6 +30,8 @@ pub fn run() {
             storage::commands::load_app_data,
             storage::commands::load_model_settings,
             storage::commands::save_model_settings,
+            storage::commands::load_agent_prompt_preferences,
+            storage::commands::save_agent_prompt_preferences,
             storage::commands::load_projects,
             storage::commands::select_project_directory,
             storage::commands::save_project,
@@ -46,6 +48,7 @@ pub fn run() {
             storage::commands::delete_composer_draft,
             storage::commands::load_ui_preferences,
             storage::commands::save_ui_preferences,
+            storage::commands::select_profile_avatar,
         ])
         .run(tauri::generate_context!())
         .expect("error while running MyCopilot");

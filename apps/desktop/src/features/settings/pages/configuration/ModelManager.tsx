@@ -14,19 +14,22 @@ interface ModelManagerProps {
 export function ModelManager({ models, onBack, onCreate, onDelete, onEdit }: ModelManagerProps) {
   const { t } = useFrontendConfig();
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const pendingDeleteModel = models.find((model) => model.id === pendingDeleteId);
 
   return (
     <section className="model-manager-page" aria-labelledby="model-manager-heading">
       <div className="model-manager-page__header">
-        <div>
-          <h1 id="model-manager-heading">{t("configuration.modelManager")}</h1>
-          <p>{t("configuration.priceNote")}</p>
-        </div>
+        <h1 id="model-manager-heading">{t("configuration.modelManager")}</h1>
 
-        <button className="secondary-settings-button secondary-settings-button--accent" type="button" onClick={onCreate}>
-          <Plus aria-hidden="true" />
-          <span>{t("configuration.newModel")}</span>
-        </button>
+        <div className="model-manager-page__header-actions">
+          <button className="secondary-settings-button" type="button" onClick={onBack}>
+            {t("configuration.done")}
+          </button>
+          <button className="secondary-settings-button secondary-settings-button--accent" type="button" onClick={onCreate}>
+            <Plus aria-hidden="true" />
+            <span>{t("configuration.newModel")}</span>
+          </button>
+        </div>
       </div>
 
       <div className="model-manager-table" role="table" aria-label={t("configuration.modelTable")}>
@@ -38,69 +41,63 @@ export function ModelManager({ models, onBack, onCreate, onDelete, onEdit }: Mod
           <span role="columnheader" aria-label={t("configuration.tableActions")} />
         </div>
 
-        {models.map((model) => {
-          const isDeleting = pendingDeleteId === model.id;
+        {models.map((model) => (
+          <div className="model-manager-table__row" role="row" key={model.id}>
+            <span className="model-manager-table__model" role="cell">
+              <strong>{model.displayName}</strong>
+              {model.providerPath && <small>{model.providerPath}</small>}
+            </span>
+            <span role="cell">
+              <span className="image-support-pill" data-supported={model.supportsImage || undefined}>
+                {model.supportsImage ? t("configuration.supported") : t("configuration.unsupported")}
+              </span>
+            </span>
+            <span className="model-manager-table__price" role="cell">
+              {model.inputPrice}
+            </span>
+            <span className="model-manager-table__price" role="cell">
+              {model.outputPrice}
+            </span>
+            <span className="model-manager-table__actions" role="cell">
+              <button className="secondary-settings-button" type="button" onClick={() => onEdit(model)}>
+                {t("configuration.edit")}
+              </button>
+              <button className="secondary-settings-button" type="button" onClick={() => setPendingDeleteId(model.id)}>
+                {t("configuration.delete")}
+              </button>
+            </span>
+          </div>
+        ))}
+      </div>
 
-          return (
-            <div className="model-manager-table__row" role="row" key={model.id}>
-              <span className="model-manager-table__model" role="cell">
-                <strong>{model.displayName}</strong>
-                {model.providerPath && <small>{model.providerPath}</small>}
-              </span>
-              <span role="cell">
-                <span className="image-support-pill" data-supported={model.supportsImage || undefined}>
-                  {model.supportsImage ? t("configuration.supported") : t("configuration.unsupported")}
-                </span>
-              </span>
-              <span className="model-manager-table__price" role="cell">
-                {model.inputPrice}
-              </span>
-              <span className="model-manager-table__price" role="cell">
-                {model.outputPrice}
-              </span>
-              <span className="model-manager-table__actions" role="cell">
-                {isDeleting ? (
-                  <span className="delete-confirmation">
-                    <span>{t("configuration.confirmDelete")}</span>
-                    <button
-                      className="danger-settings-button"
-                      type="button"
-                      onClick={() => {
-                        onDelete(model.id);
-                        setPendingDeleteId(null);
-                      }}
-                    >
-                      {t("configuration.delete")}
-                    </button>
-                    <button className="secondary-settings-button" type="button" onClick={() => setPendingDeleteId(null)}>
-                      {t("configuration.cancel")}
-                    </button>
-                  </span>
-                ) : (
-                  <>
-                    <button className="secondary-settings-button" type="button" onClick={() => onEdit(model)}>
-                      {t("configuration.edit")}
-                    </button>
-                    <button
-                      className="secondary-settings-button"
-                      type="button"
-                      onClick={() => setPendingDeleteId(model.id)}
-                    >
-                      {t("configuration.delete")}
-                    </button>
-                  </>
-                )}
-              </span>
+      {pendingDeleteModel && (
+        <div
+          className="model-delete-dialog"
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="model-delete-dialog-heading"
+        >
+          <div className="model-delete-dialog__card">
+            <h2 id="model-delete-dialog-heading">{t("configuration.confirmDelete")}</h2>
+            <p>{pendingDeleteModel.displayName}</p>
+            <div className="model-delete-dialog__actions">
+              <button className="secondary-settings-button" type="button" onClick={() => setPendingDeleteId(null)}>
+                {t("configuration.cancel")}
+              </button>
+              <button
+                className="danger-settings-button"
+                type="button"
+                onClick={() => {
+                  onDelete(pendingDeleteModel.id);
+                  setPendingDeleteId(null);
+                }}
+              >
+                {t("configuration.delete")}
+              </button>
             </div>
-          );
-        })}
-      </div>
-
-      <div className="model-manager-page__footer">
-        <button className="primary-settings-button" type="button" onClick={onBack}>
-          {t("configuration.done")}
-        </button>
-      </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

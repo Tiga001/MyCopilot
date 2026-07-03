@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AgentInputAttachment } from "@agent";
+import type { AgentInputAttachment, AgentPromptPreferences } from "@agent";
 import type { ModelConfig, SearchMode } from "../../config/modelConfig";
 import type { AppProject } from "../../config/projectConfig";
 import type {
@@ -28,6 +28,22 @@ export interface ModelSettingsSnapshot {
   searchMode: SearchMode;
   tavilyApiKey: string;
   models: ModelConfig[];
+}
+
+export interface AgentPromptPreferencesSnapshot extends AgentPromptPreferences {
+  workMode: "coding" | "general";
+  tone: "friendly" | "pragmatic";
+  detailLevel: "low" | "medium" | "high";
+  customInstructions: string;
+  updatedAt: number;
+}
+
+interface PersistedAgentPromptPreferences {
+  workMode: string;
+  tone: string;
+  detailLevel: string;
+  customInstructions: string;
+  updatedAt: number;
 }
 
 interface PersistedModelSettingsSnapshot {
@@ -92,10 +108,15 @@ export type SidebarProjectSort = "created" | "recent" | "manual";
 export type SidebarSectionOrder = "projects_first" | "conversations_first";
 
 export interface UiPreferencesSnapshot {
+  profileAvatarDataUrl: string | null;
+  profileDisplayName: string;
+  profileHandle: string;
   sidebarConversationSort: SidebarConversationSort;
   sidebarProjectSort: SidebarProjectSort;
   sidebarProjectOrder: string[];
   sidebarSectionOrder: SidebarSectionOrder;
+  nativeFontSmoothing: boolean;
+  translucentSidebar: boolean;
   updatedAt: number;
 }
 
@@ -105,6 +126,7 @@ export interface AppDataSnapshot {
   conversations: ChatConversation[];
   composerDrafts: Record<string, ChatComposerDraft>;
   uiPreferences: UiPreferencesSnapshot;
+  agentPromptPreferences: AgentPromptPreferencesSnapshot;
 }
 
 export async function loadAppData(): Promise<AppDataSnapshot> {
@@ -114,6 +136,7 @@ export async function loadAppData(): Promise<AppDataSnapshot> {
     conversations: PersistedChatConversation[];
     composerDrafts: PersistedComposerDraft[];
     uiPreferences: UiPreferencesSnapshot;
+    agentPromptPreferences: PersistedAgentPromptPreferences;
   }>("load_app_data");
 
   return {
@@ -122,6 +145,7 @@ export async function loadAppData(): Promise<AppDataSnapshot> {
     conversations: snapshot.conversations.map(mapConversationFromPersistence),
     composerDrafts: mapDraftsFromPersistence(snapshot.composerDrafts),
     uiPreferences: normalizeUiPreferences(snapshot.uiPreferences),
+    agentPromptPreferences: normalizeAgentPromptPreferences(snapshot.agentPromptPreferences),
   };
 }
 
@@ -137,6 +161,20 @@ export async function saveModelSettings(settings: ModelSettingsSnapshot): Promis
       models: settings.models.map(mapModelToPersistence),
     },
   });
+}
+
+export async function loadAgentPromptPreferences(): Promise<AgentPromptPreferencesSnapshot> {
+  const preferences = await invoke<PersistedAgentPromptPreferences>("load_agent_prompt_preferences");
+  return normalizeAgentPromptPreferences(preferences);
+}
+
+export async function saveAgentPromptPreferences(
+  preferences: AgentPromptPreferences,
+): Promise<AgentPromptPreferencesSnapshot> {
+  const savedPreferences = await invoke<PersistedAgentPromptPreferences>("save_agent_prompt_preferences", {
+    preferences: normalizeAgentPromptPreferences(preferences),
+  });
+  return normalizeAgentPromptPreferences(savedPreferences);
 }
 
 export async function loadProjects(): Promise<AppProject[]> {
@@ -231,6 +269,10 @@ export async function saveUiPreferences(preferences: UiPreferencesSnapshot): Pro
     preferences: normalizeUiPreferences(preferences),
   });
   return normalizeUiPreferences(savedPreferences);
+}
+
+export async function selectProfileAvatar(): Promise<string | null> {
+  return invoke<string | null>("select_profile_avatar");
 }
 
 function mapModelSettingsFromPersistence(settings: PersistedModelSettingsSnapshot): ModelSettingsSnapshot {
@@ -432,12 +474,46 @@ function parseDraftAttachments(value: string): AgentInputAttachment[] {
   }
 }
 
+export function defaultAgentPromptPreferences(): AgentPromptPreferencesSnapshot {
+  return {
+    workMode: "coding",
+    tone: "pragmatic",
+    detailLevel: "medium",
+    customInstructions: "",
+    updatedAt: 0,
+  };
+}
+
+function normalizeAgentPromptPreferences(
+  preferences: AgentPromptPreferences | PersistedAgentPromptPreferences | null | undefined,
+): AgentPromptPreferencesSnapshot {
+  const defaults = defaultAgentPromptPreferences();
+  if (!preferences) return defaults;
+
+  return {
+    workMode: preferences.workMode === "general" ? "general" : defaults.workMode,
+    tone: preferences.tone === "friendly" ? "friendly" : defaults.tone,
+    detailLevel:
+      preferences.detailLevel === "low" || preferences.detailLevel === "high"
+        ? preferences.detailLevel
+        : defaults.detailLevel,
+    customInstructions:
+      typeof preferences.customInstructions === "string" ? preferences.customInstructions.trim() : "",
+    updatedAt: typeof preferences.updatedAt === "number" ? preferences.updatedAt : defaults.updatedAt,
+  };
+}
+
 export function defaultUiPreferences(): UiPreferencesSnapshot {
   return {
+    profileAvatarDataUrl: null,
+    profileDisplayName: "",
+    profileHandle: "USER",
     sidebarConversationSort: "updated",
     sidebarProjectSort: "created",
     sidebarProjectOrder: [],
     sidebarSectionOrder: "projects_first",
+    nativeFontSmoothing: false,
+    translucentSidebar: false,
     updatedAt: 0,
   };
 }
@@ -447,6 +523,12 @@ function normalizeUiPreferences(preferences: UiPreferencesSnapshot | null | unde
   if (!preferences) return defaults;
 
   return {
+    profileAvatarDataUrl:
+      typeof preferences.profileAvatarDataUrl === "string" && preferences.profileAvatarDataUrl.startsWith("data:image/")
+        ? preferences.profileAvatarDataUrl
+        : defaults.profileAvatarDataUrl,
+    profileDisplayName: normalizeProfileText(preferences.profileDisplayName, defaults.profileDisplayName),
+    profileHandle: normalizeProfileHandle(preferences.profileHandle, defaults.profileHandle),
     sidebarConversationSort: preferences.sidebarConversationSort === "created" ? "created" : "updated",
     sidebarProjectSort:
       preferences.sidebarProjectSort === "recent" || preferences.sidebarProjectSort === "manual"
@@ -455,8 +537,24 @@ function normalizeUiPreferences(preferences: UiPreferencesSnapshot | null | unde
     sidebarProjectOrder: normalizeStringList(preferences.sidebarProjectOrder),
     sidebarSectionOrder:
       preferences.sidebarSectionOrder === "conversations_first" ? "conversations_first" : "projects_first",
+    nativeFontSmoothing: Boolean(preferences.nativeFontSmoothing),
+    translucentSidebar: Boolean(preferences.translucentSidebar),
     updatedAt: preferences.updatedAt ?? 0,
   };
+}
+
+function normalizeProfileText(value: string | null | undefined, fallback: string) {
+  if (typeof value !== "string") return fallback;
+  const normalizedValue = value.trim();
+  if (normalizedValue.toLowerCase() === "hx z") return fallback;
+  return normalizedValue || fallback;
+}
+
+function normalizeProfileHandle(value: string | null | undefined, fallback: string) {
+  if (typeof value !== "string") return fallback;
+  const normalizedValue = value.trim().replace(/^@+/, "");
+  if (normalizedValue.toLowerCase() === "hxz9393") return fallback;
+  return normalizedValue || fallback;
 }
 
 function normalizeStringList(values: string[] | null | undefined) {

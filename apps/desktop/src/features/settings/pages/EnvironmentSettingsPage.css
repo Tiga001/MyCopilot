@@ -1,11 +1,10 @@
 .environment-settings-page {
-  width: min(100%, 1040px);
-  color: var(--mc-color-text-primary);
+  color: var(--settings-content-text-color);
 }
 
 .environment-settings-page h1 {
   margin: 0;
-  color: var(--mc-color-text-strong);
+  color: var(--settings-content-title-color);
   font-size: var(--mc-font-size-configuration-title);
   font-weight: var(--mc-font-weight-display);
   letter-spacing: 0;
@@ -13,7 +12,7 @@
 }
 
 .environment-projects {
-  margin-top: 130px;
+  margin-top: 34px;
 }
 
 .environment-projects__header {
@@ -26,22 +25,22 @@
 
 .environment-projects__header h2 {
   margin: 0;
-  color: var(--mc-color-text-strong);
-  font-size: var(--mc-font-size-configuration-heading);
-  font-weight: var(--mc-font-weight-black);
-  line-height: var(--mc-line-height-normal);
+  color: var(--settings-content-text-color);
+  font-size: var(--mc-font-size-settings-section-title);
+  font-weight: var(--mc-font-weight-strong);
+  line-height: var(--mc-line-height-control);
 }
 
 .environment-projects__add-button {
   flex: 0 0 auto;
-  height: 46px;
-  padding: 0 18px;
-  color: var(--mc-color-text-primary);
+  height: 36px;
+  padding: 0 16px;
+  color: var(--settings-content-text-color);
   background: var(--mc-color-surface-muted);
   border: 0;
   border-radius: var(--mc-radius-row);
   font: inherit;
-  font-size: var(--mc-font-size-settings-nav);
+  font-size: calc(var(--mc-font-size-sidebar-action) - 1px);
   font-weight: var(--mc-font-weight-black);
   cursor: pointer;
 }
@@ -63,25 +62,28 @@
 
 .environment-projects__list {
   display: grid;
-  margin-top: 30px;
-  gap: 18px;
+  margin-top: 14px;
+  gap: 0;
 }
 
 .environment-project-card {
   display: grid;
   grid-template-columns: auto auto minmax(0, 1fr) auto;
   align-items: center;
-  min-height: 78px;
-  padding: 0 20px 0 26px;
-  gap: 18px;
-  background: var(--mc-color-surface-elevated);
-  border: 1px solid var(--mc-color-border-subtle);
-  border-radius: var(--mc-radius-card);
+  min-height: 56px;
+  padding: 0 16px 0 22px;
+  gap: 14px;
+  background: transparent;
+  border-bottom: 1px solid var(--mc-color-border-subtle);
+}
+
+.environment-project-card:last-child {
+  border-bottom: 0;
 }
 
 .environment-project-card > svg {
-  width: var(--mc-icon-size-3xl);
-  height: var(--mc-icon-size-3xl);
+  width: var(--mc-icon-size-lg);
+  height: var(--mc-icon-size-lg);
   color: var(--mc-color-icon-muted);
   stroke-width: var(--mc-icon-stroke-regular);
 }
@@ -89,8 +91,8 @@
 .environment-project-card__name {
   min-width: 0;
   overflow: hidden;
-  color: var(--mc-color-text-strong);
-  font-size: var(--mc-font-size-settings-section-title);
+  color: var(--settings-content-text-color);
+  font-size: calc(var(--mc-font-size-sidebar-action) - 1px);
   font-weight: var(--mc-font-weight-semibold);
   line-height: var(--mc-line-height-normal);
   text-overflow: ellipsis;
@@ -100,8 +102,8 @@
 .environment-project-card__detail {
   min-width: 0;
   overflow: hidden;
-  color: var(--mc-color-text-muted);
-  font-size: var(--mc-font-size-settings-body);
+  color: var(--settings-content-muted-color);
+  font-size: var(--mc-font-size-xs);
   line-height: var(--mc-line-height-normal);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -109,8 +111,8 @@
 
 .environment-project-card__delete {
   display: grid;
-  width: 48px;
-  height: 42px;
+  width: 36px;
+  height: 32px;
   padding: 0;
   place-items: center;
   color: var(--mc-color-icon-muted);
@@ -121,8 +123,8 @@
 }
 
 .environment-project-card__delete svg {
-  width: var(--mc-icon-size-lg);
-  height: var(--mc-icon-size-lg);
+  width: var(--mc-icon-size-md);
+  height: var(--mc-icon-size-md);
   stroke-width: var(--mc-icon-stroke-strong);
 }
 
@@ -169,7 +171,7 @@
 
 .environment-remove-dialog h2 {
   margin: 0;
-  color: var(--mc-color-text-strong);
+  color: var(--settings-content-title-color);
   font-size: var(--mc-font-size-dialog-title-large);
   font-weight: var(--mc-font-weight-display);
   letter-spacing: 0;
@@ -178,7 +180,7 @@
 
 .environment-remove-dialog p {
   margin: 18px 0 0;
-  color: var(--mc-color-text-muted);
+  color: var(--settings-content-muted-color);
   font-size: var(--mc-font-size-settings-body);
   font-weight: var(--mc-font-weight-bold);
   line-height: var(--mc-line-height-dialog-body);
@@ -206,7 +208,7 @@
 }
 
 .environment-remove-dialog__cancel {
-  color: var(--mc-color-text-muted);
+  color: var(--settings-content-muted-color);
   background: transparent;
 }
 
@@ -229,7 +231,7 @@
 
 @media (max-width: 720px) {
   .environment-projects {
-    margin-top: 72px;
+    margin-top: 34px;
   }
 
   .environment-project-card {

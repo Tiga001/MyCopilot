@@ -14,6 +14,12 @@ export type AgentApiStyle = "openai_compatible" | "anthropic_compatible";
 
 export type AgentSearchMode = "auto" | "disabled" | "tavily";
 
+export type AgentPromptWorkMode = "coding" | "general";
+
+export type AgentPromptTone = "friendly" | "pragmatic";
+
+export type AgentPromptDetailLevel = "low" | "medium" | "high";
+
 export type AgentToolName =
   | "attachments_list"
   | "attachments_list_project"
@@ -107,6 +113,14 @@ export interface AgentAttachmentLibraryContext {
   projectAttachments: AgentAttachmentReference[];
 }
 
+export interface AgentPromptPreferences {
+  workMode?: AgentPromptWorkMode;
+  tone?: AgentPromptTone;
+  detailLevel?: AgentPromptDetailLevel;
+  customInstructions?: string;
+  updatedAt?: number;
+}
+
 export interface AgentRunContext {
   conversationId?: string;
   projectId?: string | null;
@@ -154,6 +168,7 @@ export interface AgentConversationTurnInput {
   maxTokens?: number;
   temperature?: number;
   mode?: AgentRunMode;
+  promptPreferences?: AgentPromptPreferences;
 }
 
 export interface AgentConversationMessage {

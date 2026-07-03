@@ -13,6 +13,7 @@ import {
 } from "../features/agent/agentClient";
 import { ChatConversationPage } from "../features/chat/ChatConversationPage";
 import { NewConversationPage } from "../features/chat/NewConversationPage";
+import { isMacOS } from "../lib/platform";
 import type {
   ChatComposerDraft,
   ChatConversation,
@@ -36,6 +37,7 @@ import {
 } from "../features/storage/storageClient";
 import type { UiPreferencesSnapshot } from "../features/storage/storageClient";
 import { SettingsPage } from "../features/settings/SettingsPage";
+import type { SettingsPageId } from "../features/settings/SettingsPage";
 import { getAgentActionId, getErrorMessage } from "./agentActionUtils";
 import {
   appendTimelineItem,
@@ -76,6 +78,7 @@ import type {
 
 const STREAM_MESSAGE_SAVE_THROTTLE_MS = 900;
 const DEFAULT_AGENT_MAX_TOKENS = 30000;
+const SUPPORTS_NATIVE_FONT_SMOOTHING = isMacOS();
 
 function SidebarToggleIcon({ open, side }: { open: boolean; side: Side }) {
   return (
@@ -226,6 +229,7 @@ export function App() {
   const [hasLoadedComposerDrafts, setHasLoadedComposerDrafts] = useState(false);
   const [uiPreferences, setUiPreferences] = useState<UiPreferencesSnapshot>(() => defaultUiPreferences());
   const [hasLoadedUiPreferences, setHasLoadedUiPreferences] = useState(false);
+  const [settingsInitialPage, setSettingsInitialPage] = useState<SettingsPageId>("general");
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [newConversationProjectId, setNewConversationProjectId] = useState<string | null>(null);
   const [leftWidth, setLeftWidth] = useState(LEFT_DEFAULT_WIDTH);
@@ -254,34 +258,39 @@ export function App() {
     [leftOpen, leftWidth, rightOpen, rightWidth],
   );
 
-  useEffect(() => {
-    const keepCenterVisible = () => {
+  const getConstrainedLayout = useCallback(
+    (requestedLeftOpen: boolean, requestedRightOpen: boolean, preferredSide?: Side) => {
       const shellWidth = shellRef.current?.clientWidth ?? window.innerWidth;
-      let nextLeftOpen = leftOpen;
-      let nextRightOpen = rightOpen;
-      let nextLeftWidth = leftWidth;
-      let nextRightWidth = rightWidth;
+      let nextLeftOpen = requestedLeftOpen;
+      let nextRightOpen = requestedRightOpen;
+      let nextLeftWidth = clamp(leftWidth, LEFT_MIN_WIDTH, SIDE_MAX_WIDTH);
+      let nextRightWidth = clamp(rightWidth, RIGHT_MIN_WIDTH, SIDE_MAX_WIDTH);
 
-      const minimumOpenSideWidth =
-        (nextLeftOpen ? LEFT_MIN_WIDTH : 0) + (nextRightOpen ? RIGHT_MIN_WIDTH : 0);
+      const getMinimumOpenWidth = () =>
+        CENTER_MIN_WIDTH +
+        (nextLeftOpen ? LEFT_MIN_WIDTH : 0) +
+        (nextRightOpen ? RIGHT_MIN_WIDTH : 0);
 
-      if (shellWidth < CENTER_MIN_WIDTH + minimumOpenSideWidth) {
-        if (nextRightOpen) {
+      if (shellWidth < getMinimumOpenWidth()) {
+        if (preferredSide === "left") {
           nextRightOpen = false;
-        }
-        if (shellWidth < CENTER_MIN_WIDTH + (nextLeftOpen ? LEFT_MIN_WIDTH : 0) && nextLeftOpen) {
+          if (shellWidth < getMinimumOpenWidth()) {
+            nextLeftOpen = false;
+          }
+        } else if (preferredSide === "right") {
           nextLeftOpen = false;
+          if (shellWidth < getMinimumOpenWidth()) {
+            nextRightOpen = false;
+          }
+        } else {
+          nextRightOpen = false;
+          if (shellWidth < getMinimumOpenWidth()) {
+            nextLeftOpen = false;
+          }
         }
       }
 
-      if (nextLeftOpen) {
-        nextLeftWidth = clamp(nextLeftWidth, LEFT_MIN_WIDTH, SIDE_MAX_WIDTH);
-      }
-      if (nextRightOpen) {
-        nextRightWidth = clamp(nextRightWidth, RIGHT_MIN_WIDTH, SIDE_MAX_WIDTH);
-      }
-
-      const maxOpenSideWidth = shellWidth - CENTER_MIN_WIDTH;
+      const maxOpenSideWidth = Math.max(0, shellWidth - CENTER_MIN_WIDTH);
       let overflow =
         (nextLeftOpen ? nextLeftWidth : 0) +
         (nextRightOpen ? nextRightWidth : 0) -
@@ -304,7 +313,13 @@ export function App() {
         const leftExcess = nextLeftOpen ? nextLeftWidth - LEFT_MIN_WIDTH : 0;
         const rightExcess = nextRightOpen ? nextRightWidth - RIGHT_MIN_WIDTH : 0;
 
-        if (leftExcess >= rightExcess) {
+        if (preferredSide === "left") {
+          shrinkRight();
+          shrinkLeft();
+        } else if (preferredSide === "right") {
+          shrinkLeft();
+          shrinkRight();
+        } else if (leftExcess >= rightExcess) {
           shrinkLeft();
           shrinkRight();
         } else {
@@ -313,24 +328,55 @@ export function App() {
         }
       }
 
-      if (nextLeftOpen !== leftOpen) {
-        setLeftOpen(nextLeftOpen);
+      return {
+        leftOpen: nextLeftOpen,
+        leftWidth: nextLeftWidth,
+        rightOpen: nextRightOpen,
+        rightWidth: nextRightWidth,
+      };
+    },
+    [leftWidth, rightWidth],
+  );
+
+  const applyConstrainedLayout = useCallback(
+    (requestedLeftOpen: boolean, requestedRightOpen: boolean, preferredSide?: Side) => {
+      const nextLayout = getConstrainedLayout(requestedLeftOpen, requestedRightOpen, preferredSide);
+
+      if (nextLayout.leftOpen !== leftOpen) {
+        setLeftOpen(nextLayout.leftOpen);
       }
-      if (nextRightOpen !== rightOpen) {
-        setRightOpen(nextRightOpen);
+      if (nextLayout.rightOpen !== rightOpen) {
+        setRightOpen(nextLayout.rightOpen);
       }
-      if (Math.abs(nextLeftWidth - leftWidth) > 0.5) {
-        setLeftWidth(nextLeftWidth);
+      if (Math.abs(nextLayout.leftWidth - leftWidth) > 0.5) {
+        setLeftWidth(nextLayout.leftWidth);
       }
-      if (Math.abs(nextRightWidth - rightWidth) > 0.5) {
-        setRightWidth(nextRightWidth);
+      if (Math.abs(nextLayout.rightWidth - rightWidth) > 0.5) {
+        setRightWidth(nextLayout.rightWidth);
       }
+    },
+    [getConstrainedLayout, leftOpen, leftWidth, rightOpen, rightWidth],
+  );
+
+  const toggleLeftSidebar = useCallback(() => {
+    const nextLeftOpen = !leftOpen;
+    applyConstrainedLayout(nextLeftOpen, rightOpen, nextLeftOpen ? "left" : undefined);
+  }, [applyConstrainedLayout, leftOpen, rightOpen]);
+
+  const toggleRightSidebar = useCallback(() => {
+    const nextRightOpen = !rightOpen;
+    applyConstrainedLayout(leftOpen, nextRightOpen, nextRightOpen ? "right" : undefined);
+  }, [applyConstrainedLayout, leftOpen, rightOpen]);
+
+  useEffect(() => {
+    const keepCenterVisible = () => {
+      applyConstrainedLayout(leftOpen, rightOpen);
     };
 
     keepCenterVisible();
     window.addEventListener("resize", keepCenterVisible);
     return () => window.removeEventListener("resize", keepCenterVisible);
-  }, [leftOpen, leftWidth, rightOpen, rightWidth]);
+  }, [applyConstrainedLayout, leftOpen, rightOpen]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -681,6 +727,9 @@ export function App() {
 
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId);
   const toolbarTitle = workspaceView === "conversation" ? activeConversation?.title : undefined;
+  const hasUnreadConversations = conversations.some(
+    (conversation) => !conversation.archivedAt && Boolean(conversation.unreadAt),
+  );
   const getComposerDraft = useCallback(
     (
       scopeId: string,
@@ -1553,10 +1602,13 @@ export function App() {
       <SettingsPage
         conversations={conversations}
         projects={projects}
+        initialPage={settingsInitialPage}
         onBack={() => setView("workspace")}
         onDeleteAllArchivedConversations={deleteArchivedConversations}
         onDeleteConversation={deleteConversation}
         onUnarchiveConversation={unarchiveConversation}
+        onUiPreferencesChange={updateUiPreferences}
+        uiPreferences={uiPreferences}
       />
     );
   }
@@ -1566,7 +1618,11 @@ export function App() {
       ref={shellRef}
       className="app-shell"
       data-left-open={leftOpen}
+      data-native-font-smoothing={
+        SUPPORTS_NATIVE_FONT_SMOOTHING && uiPreferences.nativeFontSmoothing ? "true" : undefined
+      }
       data-right-open={rightOpen}
+      data-translucent-sidebar={uiPreferences.translucentSidebar || undefined}
       style={{
         "--left-panel-width": `${leftOpen ? leftWidth : 0}px`,
         "--right-panel-width": `${rightOpen ? rightWidth : 0}px`,
@@ -1576,7 +1632,6 @@ export function App() {
 
       <div className="side-panel side-panel--left">
         <LeftSidebar
-          isNewConversationActive={workspaceView === "newConversation"}
           activeConversationId={activeConversationId}
           conversations={conversations}
           projects={projects}
@@ -1587,7 +1642,10 @@ export function App() {
           onArchiveProjectConversations={archiveProjectConversations}
           onMarkConversationUnread={markConversationUnread}
           onNewConversation={startNewConversation}
-          onOpenSettings={() => setView("settings")}
+          onOpenSettings={(page: SettingsPageId = "general") => {
+            setSettingsInitialPage(page);
+            setView("settings");
+          }}
           onRemoveProject={deleteProject}
           onRenameConversation={renameConversation}
           onRenameProject={renameProject}
@@ -1610,10 +1668,11 @@ export function App() {
         <div className="main-panel__toolbar" data-tauri-drag-region>
           <button
             className="panel-toggle panel-toggle--left"
+            data-has-unread={!leftOpen && hasUnreadConversations ? "true" : undefined}
             type="button"
             aria-label={leftOpen ? t("app.collapseLeftSidebar") : t("app.expandLeftSidebar")}
             aria-pressed={leftOpen}
-            onClick={() => setLeftOpen((value) => !value)}
+            onClick={toggleLeftSidebar}
           >
             <SidebarToggleIcon open={leftOpen} side="left" />
           </button>
@@ -1623,7 +1682,7 @@ export function App() {
             type="button"
             aria-label={rightOpen ? t("app.collapseRightSidebar") : t("app.expandRightSidebar")}
             aria-pressed={rightOpen}
-            onClick={() => setRightOpen((value) => !value)}
+            onClick={toggleRightSidebar}
           >
             <SidebarToggleIcon open={rightOpen} side="right" />
           </button>

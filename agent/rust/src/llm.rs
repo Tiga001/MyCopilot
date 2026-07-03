@@ -257,7 +257,11 @@ fn validate_llm_response(
 
 fn extract_api_error(value: &Value) -> Option<String> {
     let error = value.get("error")?;
-    if let Some(message) = error.as_str().map(str::trim).filter(|message| !message.is_empty()) {
+    if let Some(message) = error
+        .as_str()
+        .map(str::trim)
+        .filter(|message| !message.is_empty())
+    {
         return Some(message.to_string());
     }
 

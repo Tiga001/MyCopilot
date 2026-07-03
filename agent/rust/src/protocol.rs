@@ -16,6 +16,8 @@ pub struct AgentChatInput {
     pub stream: Option<bool>,
     pub context: Option<AgentRunContext>,
     pub search_config: Option<AgentSearchConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_preferences: Option<AgentPromptPreferences>,
     pub approval_decision: Option<AgentApprovalDecision>,
     #[serde(default)]
     pub attachments: Vec<AgentInputAttachment>,
@@ -104,6 +106,43 @@ pub enum AgentSearchMode {
     Auto,
     Disabled,
     Tavily,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentPromptWorkMode {
+    Coding,
+    General,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentPromptTone {
+    Friendly,
+    Pragmatic,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentPromptDetailLevel {
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentPromptPreferences {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub work_mode: Option<AgentPromptWorkMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tone: Option<AgentPromptTone>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail_level: Option<AgentPromptDetailLevel>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custom_instructions: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<i64>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]

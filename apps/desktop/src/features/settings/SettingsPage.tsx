@@ -1,17 +1,23 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { LucideIcon } from "lucide-react";
-import { Archive, ArrowLeft, Gauge, Monitor, Search, Settings, Shield, Sun } from "lucide-react";
+import { Archive, ArrowLeft, Clock, Gauge, Monitor, Search, Settings, Shield, Sun, UserCircle } from "lucide-react";
 import { useFrontendConfig } from "../../config/FrontendConfigProvider";
+import { isMacOS } from "../../lib/platform";
 import type { AppProject } from "../../config/projectConfig";
 import type { TranslationKey } from "../../config/frontendTranslations";
 import type { ChatConversation } from "../chat/chatTypes";
+import type { UiPreferencesSnapshot } from "../storage/storageClient";
 import { AppearanceSettingsPage } from "./pages/AppearanceSettingsPage";
 import { ArchivedConversationsSettingsPage } from "./pages/ArchivedConversationsSettingsPage";
 import { ConfigurationSettingsPage } from "./pages/ConfigurationSettingsPage";
 import { EnvironmentSettingsPage } from "./pages/EnvironmentSettingsPage";
 import { GeneralSettingsPage } from "./pages/GeneralSettingsPage";
+import { PersonalizationSettingsPage } from "./pages/PersonalizationSettingsPage";
+import { ProfileSettingsPage } from "./pages/ProfileSettingsPage";
 import { UsageBillingSettingsPage } from "./pages/UsageBillingSettingsPage";
 import "./SettingsPage.css";
+
+const SUPPORTS_NATIVE_FONT_SMOOTHING = isMacOS();
 
 interface SettingsPageProps {
   conversations: ChatConversation[];
@@ -19,13 +25,18 @@ interface SettingsPageProps {
   onDeleteAllArchivedConversations: () => void;
   onDeleteConversation: (conversationId: string) => void;
   onUnarchiveConversation: (conversationId: string) => void;
+  onUiPreferencesChange: (patch: Partial<UiPreferencesSnapshot>) => void;
   projects: AppProject[];
+  initialPage?: SettingsPageId;
+  uiPreferences: UiPreferencesSnapshot;
 }
 
-type SettingsPageId =
+export type SettingsPageId =
   | "general"
+  | "profile"
   | "appearance"
   | "configuration"
+  | "personalization"
   | "usageBilling"
   | "environment"
   | "archivedConversations";
@@ -41,8 +52,10 @@ const SETTINGS_GROUPS: Array<{ titleKey: TranslationKey; items: SettingsNavItem[
     titleKey: "settings.group.personal",
     items: [
       { id: "general", labelKey: "settings.page.general", icon: Settings },
+      { id: "profile", labelKey: "settings.page.profile", icon: UserCircle },
       { id: "appearance", labelKey: "settings.page.appearance", icon: Sun },
       { id: "configuration", labelKey: "settings.page.configuration", icon: Shield },
+      { id: "personalization", labelKey: "settings.page.personalization", icon: Clock },
       { id: "usageBilling", labelKey: "settings.page.usageBilling", icon: Gauge },
     ],
   },
@@ -62,21 +75,33 @@ function SettingsContent({
   onDeleteAllArchivedConversations,
   onDeleteConversation,
   onUnarchiveConversation,
+  onUiPreferencesChange,
   projects,
+  uiPreferences,
 }: {
   activePage: SettingsPageId;
   conversations: ChatConversation[];
   onDeleteAllArchivedConversations: () => void;
   onDeleteConversation: (conversationId: string) => void;
   onUnarchiveConversation: (conversationId: string) => void;
+  onUiPreferencesChange: (patch: Partial<UiPreferencesSnapshot>) => void;
   projects: AppProject[];
+  uiPreferences: UiPreferencesSnapshot;
 }) {
   if (activePage === "appearance") {
-    return <AppearanceSettingsPage />;
+    return <AppearanceSettingsPage uiPreferences={uiPreferences} onUiPreferencesChange={onUiPreferencesChange} />;
+  }
+
+  if (activePage === "profile") {
+    return <ProfileSettingsPage uiPreferences={uiPreferences} onUiPreferencesChange={onUiPreferencesChange} />;
   }
 
   if (activePage === "configuration") {
     return <ConfigurationSettingsPage />;
+  }
+
+  if (activePage === "personalization") {
+    return <PersonalizationSettingsPage />;
   }
 
   if (activePage === "usageBilling") {
@@ -157,13 +182,29 @@ export function SettingsPage({
   onDeleteAllArchivedConversations,
   onDeleteConversation,
   onUnarchiveConversation,
+  onUiPreferencesChange,
   projects,
+  initialPage = "general",
+  uiPreferences,
 }: SettingsPageProps) {
   const { t } = useFrontendConfig();
-  const [activePage, setActivePage] = useState<SettingsPageId>("general");
+  const [activePage, setActivePage] = useState<SettingsPageId>(initialPage);
+
+  useEffect(() => {
+    setActivePage(initialPage);
+  }, [initialPage]);
 
   return (
-    <div className="settings-page">
+    <div
+      className="settings-page"
+      data-native-font-smoothing={
+        SUPPORTS_NATIVE_FONT_SMOOTHING && uiPreferences.nativeFontSmoothing ? "true" : undefined
+      }
+      data-translucent-sidebar={uiPreferences.translucentSidebar || undefined}
+      onContextMenu={(event) => {
+        event.preventDefault();
+      }}
+    >
       <div className="settings-page__drag-region" data-tauri-drag-region />
       <SettingsNavigation activePage={activePage} onBack={onBack} onSelectPage={setActivePage} />
 
@@ -176,6 +217,8 @@ export function SettingsPage({
             onDeleteAllArchivedConversations={onDeleteAllArchivedConversations}
             onDeleteConversation={onDeleteConversation}
             onUnarchiveConversation={onUnarchiveConversation}
+            onUiPreferencesChange={onUiPreferencesChange}
+            uiPreferences={uiPreferences}
           />
         </div>
       </main>

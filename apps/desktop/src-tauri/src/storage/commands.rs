@@ -1,11 +1,12 @@
 use crate::storage::models::{
-    AppDataSnapshot, AttachmentRecord, ChatConversationMetaRecord, ChatConversationRecord,
-    ChatMessageAttachmentRecord, ChatMessageRecord, ChatMessageStateRecord, ComposerDraftRecord,
-    ModelSettingsRecord, ProjectRecord, UiPreferencesRecord,
+    AgentPromptPreferencesRecord, AppDataSnapshot, AttachmentRecord, ChatConversationMetaRecord,
+    ChatConversationRecord, ChatMessageAttachmentRecord, ChatMessageRecord, ChatMessageStateRecord,
+    ComposerDraftRecord, ModelSettingsRecord, ProjectRecord, UiPreferencesRecord,
 };
 use crate::storage::{
-    attachment_repository, chat_repository, composer_draft_repository, config_repository, now_ms,
-    preferences_repository, project_repository, storage_error, StorageState,
+    agent_prompt_preferences_repository, attachment_repository, chat_repository,
+    composer_draft_repository, config_repository, now_ms, preferences_repository,
+    project_repository, storage_error, StorageState,
 };
 use base64::Engine;
 use rusqlite::Connection;
@@ -22,7 +23,8 @@ pub fn load_app_data(
 ) -> Result<AppDataSnapshot, String> {
     let connection = state.connection()?;
     let attachment_root = attachment_root(&app_handle)?;
-    let mut conversations = chat_repository::list_conversations(&connection).map_err(storage_error)?;
+    let mut conversations =
+        chat_repository::list_conversations(&connection).map_err(storage_error)?;
     attach_message_attachments(&connection, &attachment_root, &mut conversations)?;
 
     Ok(AppDataSnapshot {
@@ -34,6 +36,9 @@ pub fn load_app_data(
             .map_err(storage_error)?,
         ui_preferences: preferences_repository::load_ui_preferences(&connection)
             .map_err(storage_error)?,
+        agent_prompt_preferences:
+            agent_prompt_preferences_repository::load_agent_prompt_preferences(&connection)
+                .map_err(storage_error)?,
     })
 }
 
@@ -52,6 +57,25 @@ pub fn save_model_settings(
 ) -> Result<(), String> {
     let mut connection = state.connection()?;
     config_repository::save_model_settings(&mut connection, settings).map_err(storage_error)
+}
+
+#[tauri::command]
+pub fn load_agent_prompt_preferences(
+    state: State<'_, StorageState>,
+) -> Result<AgentPromptPreferencesRecord, String> {
+    let connection = state.connection()?;
+    agent_prompt_preferences_repository::load_agent_prompt_preferences(&connection)
+        .map_err(storage_error)
+}
+
+#[tauri::command]
+pub fn save_agent_prompt_preferences(
+    state: State<'_, StorageState>,
+    preferences: AgentPromptPreferencesRecord,
+) -> Result<AgentPromptPreferencesRecord, String> {
+    let connection = state.connection()?;
+    agent_prompt_preferences_repository::save_agent_prompt_preferences(&connection, preferences)
+        .map_err(storage_error)
 }
 
 #[tauri::command]
@@ -167,7 +191,8 @@ pub fn load_conversations(
 ) -> Result<Vec<ChatConversationRecord>, String> {
     let connection = state.connection()?;
     let attachment_root = attachment_root(&app_handle)?;
-    let mut conversations = chat_repository::list_conversations(&connection).map_err(storage_error)?;
+    let mut conversations =
+        chat_repository::list_conversations(&connection).map_err(storage_error)?;
     attach_message_attachments(&connection, &attachment_root, &mut conversations)?;
     Ok(conversations)
 }
@@ -189,8 +214,7 @@ pub fn save_conversation_meta(
     conversation: ChatConversationMetaRecord,
 ) -> Result<ChatConversationMetaRecord, String> {
     let connection = state.connection()?;
-    chat_repository::save_conversation_meta(&connection, &conversation)
-        .map_err(storage_error)?;
+    chat_repository::save_conversation_meta(&connection, &conversation).map_err(storage_error)?;
     Ok(conversation)
 }
 
@@ -202,8 +226,13 @@ pub fn upsert_chat_messages(
     position_offset: i64,
 ) -> Result<Vec<ChatMessageRecord>, String> {
     let mut connection = state.connection()?;
-    chat_repository::upsert_messages(&mut connection, &conversation_id, &messages, position_offset)
-        .map_err(storage_error)?;
+    chat_repository::upsert_messages(
+        &mut connection,
+        &conversation_id,
+        &messages,
+        position_offset,
+    )
+    .map_err(storage_error)?;
     Ok(messages)
 }
 
@@ -270,6 +299,37 @@ pub fn save_ui_preferences(
     preferences_repository::save_ui_preferences(&connection, preferences).map_err(storage_error)
 }
 
+#[tauri::command]
+pub fn select_profile_avatar() -> Result<Option<String>, String> {
+    const MAX_AVATAR_BYTES: u64 = 5 * 1024 * 1024;
+
+    let Some(selected_path) = rfd::FileDialog::new()
+        .add_filter(
+            "Images",
+            &["png", "jpg", "jpeg", "webp", "gif", "bmp", "avif"],
+        )
+        .pick_file()
+    else {
+        return Ok(None);
+    };
+
+    let metadata =
+        fs::metadata(&selected_path).map_err(|error| format!("头像文件不可访问：{error}"))?;
+    if !metadata.is_file() {
+        return Err("请选择一个图片文件。".to_string());
+    }
+    if metadata.len() > MAX_AVATAR_BYTES {
+        return Err("头像文件不能超过 5 MB。".to_string());
+    }
+
+    let mime_type = profile_avatar_mime_type(&selected_path)
+        .ok_or_else(|| "请选择 png、jpg、webp、gif、bmp 或 avif 图片。".to_string())?;
+    let bytes = fs::read(&selected_path).map_err(|error| format!("读取头像失败：{error}"))?;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+
+    Ok(Some(format!("data:{mime_type};base64,{encoded}")))
+}
+
 fn attachment_root(app_handle: &AppHandle) -> Result<PathBuf, String> {
     Ok(app_handle
         .path()
@@ -284,11 +344,9 @@ fn attach_message_attachments(
     conversations: &mut [ChatConversationRecord],
 ) -> Result<(), String> {
     for conversation in conversations {
-        let attachments = attachment_repository::list_conversation_attachments(
-            connection,
-            &conversation.id,
-        )
-        .map_err(storage_error)?;
+        let attachments =
+            attachment_repository::list_conversation_attachments(connection, &conversation.id)
+                .map_err(storage_error)?;
         if attachments.is_empty() {
             continue;
         }
@@ -367,6 +425,19 @@ fn safe_attachment_storage_path(attachment_root: &Path, storage_rel_path: &str) 
     }
 
     Some(attachment_root.join(relative_path))
+}
+
+fn profile_avatar_mime_type(path: &Path) -> Option<&'static str> {
+    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+    match extension.as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "webp" => Some("image/webp"),
+        "gif" => Some("image/gif"),
+        "bmp" => Some("image/bmp"),
+        "avif" => Some("image/avif"),
+        _ => None,
+    }
 }
 
 fn create_project_id(name: &str) -> String {

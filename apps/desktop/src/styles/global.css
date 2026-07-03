@@ -1,7 +1,7 @@
 :root {
   font-family: var(--mc-font-family);
   color: var(--mc-color-text-primary);
-  background: var(--mc-color-surface-app);
+  background: transparent;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   --titlebar-height: var(--mc-layout-titlebar-height);
@@ -9,6 +9,7 @@
   --left-panel: var(--mc-color-surface-left-panel);
   --main-panel: var(--mc-color-surface-main-panel);
   --right-panel: var(--mc-color-surface-right-panel);
+  --mac-window-control-safe-width: 84px;
 }
 
 * {
@@ -21,11 +22,21 @@ body,
   width: 100%;
   height: 100%;
   margin: 0;
+  background: transparent;
   overflow: hidden;
 }
 
 button {
   font: inherit;
+}
+
+.app-shell[data-native-font-smoothing="true"],
+.app-shell[data-native-font-smoothing="true"] *,
+.settings-page[data-native-font-smoothing="true"],
+.settings-page[data-native-font-smoothing="true"] * {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 .app-shell {
@@ -39,6 +50,22 @@ button {
   min-width: 520px;
   background: var(--main-panel);
   transition: grid-template-columns 180ms ease;
+}
+
+.app-shell[data-translucent-sidebar="true"] {
+  background: transparent;
+}
+
+.app-shell[data-translucent-sidebar="true"]::before {
+  position: absolute;
+  z-index: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: var(--left-panel-width);
+  background: var(--main-panel);
+  content: "";
+  pointer-events: none;
 }
 
 .window-toolbar {
@@ -56,9 +83,10 @@ button {
   right: 0;
   bottom: 0;
   left: var(--left-panel-width);
-  height: 1px;
+  height: 0.5px;
   background: var(--hairline);
   content: "";
+  opacity: 0.7;
   pointer-events: none;
 }
 
@@ -81,6 +109,17 @@ button {
   overflow: visible;
   background: var(--left-panel);
   border-right: 1px solid var(--hairline);
+  transition:
+    background-color 160ms ease,
+    backdrop-filter 160ms ease,
+    opacity 120ms ease,
+    visibility 0ms linear 120ms;
+}
+
+.app-shell[data-translucent-sidebar="true"] .side-panel--left {
+  background: var(--mc-color-surface-left-panel-translucent);
+  backdrop-filter: saturate(1.45) var(--mc-effect-blur-sidebar);
+  -webkit-backdrop-filter: saturate(1.45) var(--mc-effect-blur-sidebar);
 }
 
 .side-panel--right {
@@ -140,6 +179,17 @@ button {
   background: var(--mc-color-state-hover);
 }
 
+.panel-toggle[data-has-unread="true"]::after {
+  position: absolute;
+  top: 7px;
+  right: 6px;
+  width: 7px;
+  height: 7px;
+  content: "";
+  background: var(--mc-color-text-accent);
+  border-radius: 50%;
+}
+
 .panel-toggle:focus-visible {
   outline: 2px solid var(--mc-color-focus-ring);
   outline-offset: 1px;
@@ -154,7 +204,7 @@ button {
 }
 
 .app-shell[data-left-open="false"] .panel-toggle--left {
-  left: 84px;
+  left: var(--mac-window-control-safe-width);
 }
 
 .panel-toggle__icon {
@@ -225,6 +275,10 @@ button {
   text-overflow: ellipsis;
   white-space: nowrap;
   pointer-events: none;
+}
+
+.app-shell[data-left-open="false"] .main-panel__title {
+  left: calc(var(--mac-window-control-safe-width) + 44px);
 }
 
 .resize-handle {

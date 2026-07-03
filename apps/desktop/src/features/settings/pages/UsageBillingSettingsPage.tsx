@@ -4,9 +4,8 @@ export function UsageBillingSettingsPage() {
   const { t } = useFrontendConfig();
 
   return (
-    <article className="settings-detail">
+    <article className="settings-list-page">
       <h1>{t("settings.page.usageBilling")}</h1>
-      <p>{t("usageBilling.description")}</p>
     </article>
   );
 }

@@ -43,52 +43,80 @@ export function ModelForm({ model, onCancel, onSave }: ModelFormProps) {
     >
       <h1 id="model-form-heading">{isEditing ? t("configuration.editModel") : t("configuration.newModel")}</h1>
 
-      <label className="configuration-field">
-        <span>{t("configuration.modelId")}</span>
-        <input
-          value={values.id}
-          placeholder={t("configuration.modelIdPlaceholder")}
-          onChange={(event) => setValues((current) => ({ ...current, id: event.target.value }))}
-        />
-      </label>
-
-      <label className="configuration-field">
-        <span>{t("configuration.displayName")}</span>
-        <input
-          value={values.displayName}
-          placeholder={t("configuration.displayNamePlaceholder")}
-          onChange={(event) => setValues((current) => ({ ...current, displayName: event.target.value }))}
-        />
-      </label>
-
-      <div className="model-form-page__price-grid">
-        <label className="configuration-field">
-          <span>{t("configuration.inputPrice")}</span>
-          <input
-            inputMode="decimal"
-            value={values.inputPrice}
-            onChange={(event) => setValues((current) => ({ ...current, inputPrice: event.target.value }))}
-          />
+      <div className="model-form-page__fields settings-list">
+        <label className="configuration-field settings-list-row">
+          <span className="settings-list-row__text">
+            <span className="settings-list-row__title">{t("configuration.modelId")}</span>
+          </span>
+          <span className="settings-list-row__control">
+            <input
+              className="settings-list-control"
+              value={values.id}
+              placeholder={t("configuration.modelIdPlaceholder")}
+              onChange={(event) => setValues((current) => ({ ...current, id: event.target.value }))}
+            />
+          </span>
         </label>
 
-        <label className="configuration-field">
-          <span>{t("configuration.outputPrice")}</span>
-          <input
-            inputMode="decimal"
-            value={values.outputPrice}
-            onChange={(event) => setValues((current) => ({ ...current, outputPrice: event.target.value }))}
-          />
+        <label className="configuration-field settings-list-row">
+          <span className="settings-list-row__text">
+            <span className="settings-list-row__title">{t("configuration.displayName")}</span>
+          </span>
+          <span className="settings-list-row__control">
+            <input
+              className="settings-list-control"
+              value={values.displayName}
+              placeholder={t("configuration.displayNamePlaceholder")}
+              onChange={(event) => setValues((current) => ({ ...current, displayName: event.target.value }))}
+            />
+          </span>
         </label>
+
+        <label className="configuration-field settings-list-row">
+          <span className="settings-list-row__text">
+            <span className="settings-list-row__title">{t("configuration.inputPrice")}</span>
+          </span>
+          <span className="settings-list-row__control">
+            <input
+              className="settings-list-control"
+              inputMode="decimal"
+              value={values.inputPrice}
+              onChange={(event) => setValues((current) => ({ ...current, inputPrice: event.target.value }))}
+            />
+          </span>
+        </label>
+
+        <label className="configuration-field settings-list-row">
+          <span className="settings-list-row__text">
+            <span className="settings-list-row__title">{t("configuration.outputPrice")}</span>
+          </span>
+          <span className="settings-list-row__control">
+            <input
+              className="settings-list-control"
+              inputMode="decimal"
+              value={values.outputPrice}
+              onChange={(event) => setValues((current) => ({ ...current, outputPrice: event.target.value }))}
+            />
+          </span>
+        </label>
+
+        <div className="configuration-field settings-list-row">
+          <span className="settings-list-row__text">
+            <span className="settings-list-row__title">{t("configuration.supportsImageInput")}</span>
+          </span>
+          <button
+            className="settings-switch"
+            type="button"
+            role="switch"
+            aria-checked={values.supportsImage}
+            data-state={values.supportsImage ? "on" : "off"}
+            onClick={() => setValues((current) => ({ ...current, supportsImage: !current.supportsImage }))}
+          >
+            <span className="settings-switch__thumb" aria-hidden="true" />
+            <span className="sr-only">{t("configuration.supportsImageInput")}</span>
+          </button>
+        </div>
       </div>
-
-      <label className="model-form-page__checkbox">
-        <input
-          type="checkbox"
-          checked={values.supportsImage}
-          onChange={(event) => setValues((current) => ({ ...current, supportsImage: event.target.checked }))}
-        />
-        <span>{t("configuration.supportsImageInput")}</span>
-      </label>
 
       <div className="model-form-page__actions">
         <button className="secondary-settings-button" type="button" onClick={onCancel}>

@@ -1,3 +1,4 @@
+pub mod agent_prompt_preferences_repository;
 pub mod attachment_repository;
 pub mod chat_repository;
 pub mod commands;

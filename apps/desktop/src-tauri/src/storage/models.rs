@@ -129,10 +129,25 @@ pub struct ComposerDraftRecord {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct UiPreferencesRecord {
+    pub profile_avatar_data_url: Option<String>,
+    pub profile_display_name: String,
+    pub profile_handle: String,
     pub sidebar_conversation_sort: String,
     pub sidebar_project_sort: String,
     pub sidebar_project_order: Vec<String>,
     pub sidebar_section_order: String,
+    pub native_font_smoothing: bool,
+    pub translucent_sidebar: bool,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentPromptPreferencesRecord {
+    pub work_mode: String,
+    pub tone: String,
+    pub detail_level: String,
+    pub custom_instructions: String,
     pub updated_at: i64,
 }
 
@@ -144,4 +159,5 @@ pub struct AppDataSnapshot {
     pub conversations: Vec<ChatConversationRecord>,
     pub composer_drafts: Vec<ComposerDraftRecord>,
     pub ui_preferences: UiPreferencesRecord,
+    pub agent_prompt_preferences: AgentPromptPreferencesRecord,
 }

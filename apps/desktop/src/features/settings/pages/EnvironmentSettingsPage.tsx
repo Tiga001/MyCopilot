@@ -15,18 +15,18 @@ export function EnvironmentSettingsPage() {
   };
 
   return (
-    <article className="environment-settings-page">
+    <article className="settings-list-page environment-settings-page">
       <h1>{t("settings.page.environment")}</h1>
 
-      <section className="environment-projects" aria-labelledby="environment-projects-heading">
-        <div className="environment-projects__header">
+      <section className="settings-list-section environment-projects" aria-labelledby="environment-projects-heading">
+        <div className="settings-list-section__header environment-projects__header">
           <h2 id="environment-projects-heading">{t("environment.selectProject")}</h2>
           <button className="environment-projects__add-button" type="button" onClick={addProjectFromFolder}>
             {t("environment.addProject")}
           </button>
         </div>
 
-        <div className="environment-projects__list">
+        <div className="settings-list environment-projects__list">
           {projects.map((project) => (
             <div className="environment-project-card" key={project.id}>
               <NotebookText aria-hidden="true" />

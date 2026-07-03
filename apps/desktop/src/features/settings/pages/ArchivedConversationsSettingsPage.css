@@ -1,6 +1,6 @@
 .archived-conversations-page {
   width: min(100%, 1040px);
-  color: var(--mc-color-text-primary);
+  color: var(--settings-content-text-color);
 }
 
 .archived-conversations-page__header {
@@ -13,7 +13,7 @@
 
 .archived-conversations-page h1 {
   margin: 0;
-  color: var(--mc-color-text-strong);
+  color: var(--settings-content-title-color);
   font-size: var(--mc-font-size-configuration-title);
   font-weight: var(--mc-font-weight-display);
   letter-spacing: 0;
@@ -72,7 +72,7 @@
   height: 46px;
   padding: 0 42px 0 14px;
   gap: 10px;
-  color: var(--mc-color-text-primary);
+  color: var(--settings-content-text-color);
   background: var(--mc-color-surface-muted);
   border-radius: var(--mc-radius-row);
 }
@@ -139,7 +139,7 @@
 
 .archived-conversation-row__main strong {
   overflow: hidden;
-  color: var(--mc-color-text-strong);
+  color: var(--settings-content-text-color);
   font-size: var(--mc-font-size-settings-section-title);
   font-weight: var(--mc-font-weight-black);
   line-height: var(--mc-line-height-compact);
@@ -149,7 +149,7 @@
 
 .archived-conversation-row__main span {
   overflow: hidden;
-  color: var(--mc-color-text-muted);
+  color: var(--settings-content-muted-color);
   font-size: var(--mc-font-size-settings-body);
   font-weight: var(--mc-font-weight-content-medium);
   line-height: var(--mc-line-height-normal);
@@ -204,7 +204,7 @@
   height: 46px;
   padding: 0 18px;
   gap: 8px;
-  color: var(--mc-color-text-primary);
+  color: var(--settings-content-text-color);
   background: var(--mc-color-surface-muted);
   border: 0;
   border-radius: var(--mc-radius-row);
@@ -237,7 +237,7 @@
   min-height: 96px;
   padding: 0 28px;
   gap: 12px;
-  color: var(--mc-color-text-muted);
+  color: var(--settings-content-muted-color);
   font-size: var(--mc-font-size-settings-body);
   font-weight: var(--mc-font-weight-section-strong);
 }

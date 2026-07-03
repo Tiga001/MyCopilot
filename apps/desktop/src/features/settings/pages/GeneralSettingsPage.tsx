@@ -1,34 +1,39 @@
 import { useFrontendConfig } from "../../../config/FrontendConfigProvider";
 import type { AppLanguage } from "../../../config/frontendTranslations";
-import "./GeneralSettingsPage.css";
 
 export function GeneralSettingsPage() {
   const { language, languageOptions, setLanguage, t } = useFrontendConfig();
 
   return (
-    <article className="settings-detail general-settings-page">
+    <article className="settings-list-page general-settings-page">
       <h1>{t("settings.page.general")}</h1>
 
-      <section className="general-settings-section" aria-labelledby="language-setting-heading">
-        <div>
-          <h2 id="language-setting-heading">{t("general.language")}</h2>
-          <p>{t("general.languageDescription")}</p>
-        </div>
+      <section className="settings-list-section" aria-labelledby="language-setting-heading">
+        <div className="settings-list">
+          <label className="settings-list-row general-settings-select">
+            <span className="settings-list-row__text">
+              <span className="settings-list-row__title" id="language-setting-heading">
+                {t("general.language")}
+              </span>
+            </span>
 
-        <label className="general-settings-select">
-          <span className="sr-only">{t("general.languageAria")}</span>
-          <select
-            value={language}
-            onChange={(event) => setLanguage(event.target.value as AppLanguage)}
-            aria-label={t("general.languageAria")}
-          >
-            {languageOptions.map((option) => (
-              <option value={option.value} key={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
+            <span className="settings-list-row__control">
+              <span className="sr-only">{t("general.languageAria")}</span>
+              <select
+                className="settings-list-control settings-list-select"
+                value={language}
+                onChange={(event) => setLanguage(event.target.value as AppLanguage)}
+                aria-label={t("general.languageAria")}
+              >
+                {languageOptions.map((option) => (
+                  <option value={option.value} key={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </span>
+          </label>
+        </div>
       </section>
     </article>
   );

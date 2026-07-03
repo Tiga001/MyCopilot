@@ -1,4 +1,5 @@
 mod llm;
+mod prompts;
 pub mod protocol;
 mod runtime;
 mod tools;
@@ -8,7 +9,8 @@ pub use protocol::{
     AgentAttachmentLibraryContext, AgentAttachmentReference, AgentChatInput, AgentChatMessage,
     AgentChatOutput, AgentCommandOutputStream, AgentCommandRequest, AgentCommandRiskLevel,
     AgentDiffProposal, AgentError, AgentEvent, AgentInputAttachment, AgentInputAttachmentEncoding,
-    AgentInputAttachmentKind, AgentProposedAction, AgentResult, AgentRunContext, AgentRunMode,
+    AgentInputAttachmentKind, AgentPromptDetailLevel, AgentPromptPreferences, AgentPromptTone,
+    AgentPromptWorkMode, AgentProposedAction, AgentResult, AgentRunContext, AgentRunMode,
     AgentRunStatus, AgentSearchConfig, AgentSearchMode, AgentStateSnapshot, AgentToolCall,
     AgentToolDefinition, AgentToolResult, AgentToolSafety, AgentUsage, AgentWorkspaceContext,
 };

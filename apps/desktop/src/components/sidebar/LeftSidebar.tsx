@@ -21,6 +21,11 @@ import type { FormEvent, PointerEvent as ReactPointerEvent } from "react";
 import { useFrontendConfig } from "../../config/FrontendConfigProvider";
 import type { AppProject } from "../../config/projectConfig";
 import type { ChatConversation } from "../../features/chat/chatTypes";
+import {
+  getProfileDisplayName,
+  getProfileHandle,
+  getProfileInitials,
+} from "../../features/profile/profileUtils";
 import type {
   SidebarConversationSort,
   SidebarProjectSort,
@@ -50,7 +55,6 @@ interface ProjectPointerDragState {
 interface LeftSidebarProps {
   activeConversationId: string | null;
   conversations: ChatConversation[];
-  isNewConversationActive: boolean;
   onArchiveAllProjectConversations: () => void;
   onArchiveAllRootConversations: () => void;
   onArchiveConversation: (conversationId: string) => void;
@@ -367,7 +371,6 @@ function ConversationRow({
 export function LeftSidebar({
   activeConversationId,
   conversations,
-  isNewConversationActive,
   onArchiveAllProjectConversations,
   onArchiveAllRootConversations,
   onArchiveConversation,
@@ -400,11 +403,13 @@ export function LeftSidebar({
   const [pendingBulkArchiveScope, setPendingBulkArchiveScope] = useState<BulkArchiveScope | null>(null);
   const [pendingArchiveProject, setPendingArchiveProject] = useState<AppProject | null>(null);
   const [pendingRemoveProject, setPendingRemoveProject] = useState<AppProject | null>(null);
+  const [isAccountMenuOpen, setAccountMenuOpen] = useState(false);
   const [draggingProjectId, setDraggingProjectId] = useState<string | null>(null);
   const [projectDragPreviewOrder, setProjectDragPreviewOrderState] = useState<string[] | null>(null);
   const [now, setNow] = useState(Date.now());
   const projectMenuRef = useRef<HTMLDivElement>(null);
   const sectionMenuRef = useRef<HTMLDivElement>(null);
+  const accountMenuRef = useRef<HTMLDivElement>(null);
   const projectRowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const projectAnimationRectsRef = useRef<Map<string, DOMRect> | null>(null);
   const projectPointerDragRef = useRef<ProjectPointerDragState | null>(null);
@@ -444,6 +449,9 @@ export function LeftSidebar({
     uiPreferences.sidebarConversationSort,
   );
   const activeConversation = visibleConversations.find((conversation) => conversation.id === activeConversationId);
+  const profileDisplayName = getProfileDisplayName(uiPreferences, language);
+  const profileHandle = getProfileHandle(uiPreferences);
+  const profileInitials = getProfileInitials(profileDisplayName);
   const hasPinnedItems = pinnedProjects.length > 0 || pinnedRootConversations.length > 0;
   const projectArchiveAllCount = visibleConversations.filter(
     (conversation) => conversation.projectId && projectIds.has(conversation.projectId),
@@ -463,6 +471,7 @@ export function LeftSidebar({
     setOpenSectionMenu(null);
     setOpenSectionSubmenu(null);
   });
+  useDismissOnOutsidePointer(accountMenuRef, isAccountMenuOpen, () => setAccountMenuOpen(false));
 
   useEffect(() => {
     const intervalId = window.setInterval(() => setNow(Date.now()), 60_000);
@@ -1197,44 +1206,97 @@ export function LeftSidebar({
         if (!event.defaultPrevented) event.preventDefault();
       }}
     >
-      <button
-        className="left-sidebar__primary-action"
-        data-active={isNewConversationActive || undefined}
-        type="button"
-        onClick={() => onNewConversation(null)}
-      >
-        <SquarePen aria-hidden="true" />
-        <span>{t("sidebar.newConversation")}</span>
-      </button>
+      <div className="left-sidebar__header">
+        <button
+          className="left-sidebar__primary-action"
+          type="button"
+          onClick={() => onNewConversation(null)}
+        >
+          <SquarePen aria-hidden="true" />
+          <span>{t("sidebar.newConversation")}</span>
+        </button>
+      </div>
 
-      {hasPinnedItems && (
-        <section className="left-sidebar__section left-sidebar__pinned" aria-labelledby="pinned-heading">
-          <h2 id="pinned-heading" className="left-sidebar__section-title left-sidebar__standalone-title">
-            {t("sidebar.pinned")}
-          </h2>
-          <div className="left-sidebar__pinned-list">
-            {pinnedRootConversations.map((conversation) => renderConversationRow(conversation))}
-            {pinnedProjects.map((project) => renderProjectGroup(project, true, []))}
+      <div className="left-sidebar__scroll">
+        {hasPinnedItems && (
+          <section className="left-sidebar__section left-sidebar__pinned" aria-labelledby="pinned-heading">
+            <h2 id="pinned-heading" className="left-sidebar__section-title left-sidebar__standalone-title">
+              {t("sidebar.pinned")}
+            </h2>
+            <div className="left-sidebar__pinned-list">
+              {pinnedRootConversations.map((conversation) => renderConversationRow(conversation))}
+              {pinnedProjects.map((project) => renderProjectGroup(project, true, []))}
+            </div>
+          </section>
+        )}
+
+        {uiPreferences.sidebarSectionOrder === "conversations_first" ? (
+          <>
+            {conversationsSection}
+            {projectsSection}
+          </>
+        ) : (
+          <>
+            {projectsSection}
+            {conversationsSection}
+          </>
+        )}
+      </div>
+
+      <div className="left-sidebar__footer" data-menu-open={isAccountMenuOpen || undefined} ref={accountMenuRef}>
+        {isAccountMenuOpen && (
+          <div className="left-sidebar__account-menu" role="menu" aria-label={t("sidebar.accountMenu")}>
+            <div className="left-sidebar__account-menu-profile" aria-hidden="true">
+              <span className="left-sidebar__account-avatar left-sidebar__account-avatar--small">
+                {uiPreferences.profileAvatarDataUrl ? (
+                  <img src={uiPreferences.profileAvatarDataUrl} alt="" />
+                ) : (
+                  <span>{profileInitials}</span>
+                )}
+              </span>
+              <span className="left-sidebar__account-menu-profile-text">
+                <span>{profileDisplayName}</span>
+                <span>@{profileHandle}</span>
+              </span>
+            </div>
+
+            <div className="left-sidebar__account-menu-divider" />
+
+            <button
+              className="left-sidebar__account-menu-item"
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setAccountMenuOpen(false);
+                onOpenSettings();
+              }}
+            >
+              <Settings aria-hidden="true" />
+              <span>{t("profile.openSettings")}</span>
+            </button>
           </div>
-        </section>
-      )}
+        )}
 
-      {uiPreferences.sidebarSectionOrder === "conversations_first" ? (
-        <>
-          {conversationsSection}
-          {projectsSection}
-        </>
-      ) : (
-        <>
-          {projectsSection}
-          {conversationsSection}
-        </>
-      )}
-
-      <button className="left-sidebar__settings" type="button" onClick={onOpenSettings}>
-        <Settings aria-hidden="true" />
-        <span>{t("sidebar.settings")}</span>
-      </button>
+        <button
+          className="left-sidebar__account-button"
+          type="button"
+          aria-label={t("sidebar.accountMenu")}
+          aria-expanded={isAccountMenuOpen}
+          onClick={() => setAccountMenuOpen((isOpen) => !isOpen)}
+        >
+          <span className="left-sidebar__account-avatar">
+            {uiPreferences.profileAvatarDataUrl ? (
+              <img src={uiPreferences.profileAvatarDataUrl} alt="" />
+            ) : (
+              <span>{profileInitials}</span>
+            )}
+          </span>
+          <span className="left-sidebar__account-text">
+            <span>{profileDisplayName}</span>
+            <span>@{profileHandle}</span>
+          </span>
+        </button>
+      </div>
 
       {renamingProject && (
         <div

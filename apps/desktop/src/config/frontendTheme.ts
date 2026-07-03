@@ -8,19 +8,23 @@ export const lightTheme = {
       subtle: "#979ca4",
       inverse: "#ffffff",
       danger: "#b42318",
-      accent: "#339CFF",
+      accent: "#0169CC",
     },
     icon: {
       default: "#1A1C1F",
       muted: "#697381",
       subtle: "#8f949c",
-      accent: "#339CFF",
+      accent: "#0169CC",
       danger: "#ff2a16",
       success: "#008768",
+    },
+    avatar: {
+      background: "#D85A00",
     },
     surface: {
       app: "#FFFFFF",
       leftPanel: "#F7F7F5",
+      leftPanelTranslucent: "rgba(247, 247, 245, 0.46)",
       mainPanel: "#FFFFFF",
       rightPanel: "#FFFFFF",
       settingsNav: "#FFFFFF",
@@ -62,8 +66,13 @@ export const lightTheme = {
       dangerSoftBgHover: "#fbd9dc",
     },
     sidebar: {
-      textSecondary: "#4f5660",
+      textSecondary: "#2F3338",
       textActive: "#1A1C1F",
+    },
+    settings: {
+      contentTitle: "#1A1C1F",
+      contentText: "#2F3338",
+      contentMuted: "#8b95a1",
     },
     state: {
       hover: "rgba(31, 35, 41, 0.055)",
@@ -108,9 +117,13 @@ export const darkTheme = {
       danger: "#FF5F54",
       success: "#35D493",
     },
+    avatar: {
+      background: "#D85A00",
+    },
     surface: {
       app: "#111111",
       leftPanel: "#171717",
+      leftPanelTranslucent: "rgba(0, 0, 0, 0.75)",
       mainPanel: "#101010",
       rightPanel: "#141414",
       settingsNav: "#111111",
@@ -152,8 +165,13 @@ export const darkTheme = {
       dangerSoftBgHover: "rgba(255, 95, 84, 0.2)",
     },
     sidebar: {
-      textSecondary: "#E0E0E0",
+      textSecondary: "#ECECEC",
       textActive: "#FCFCFC",
+    },
+    settings: {
+      contentTitle: "#FCFCFC",
+      contentText: "#ECECEC",
+      contentMuted: "#969BA3",
     },
     state: {
       hover: "rgba(255, 255, 255, 0.075)",
