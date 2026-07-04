@@ -3,6 +3,7 @@ import type {
   AgentConversationTurnInput,
   AgentConversationTurnOutput,
   AgentProposedAction,
+  AgentToolResult,
   AgentUsageClearInput,
   AgentUsageClearOutput,
   AgentUsageSummaryInput,
@@ -51,6 +52,7 @@ export interface AgentActionExecutionOutput {
   status: AgentActionExecutionStatus;
   patchResult?: AgentPatchExecutionResult;
   commandResult?: AgentCommandExecutionResult;
+  toolResult?: AgentToolResult;
   agentOutput: AgentChatOutput;
 }
 

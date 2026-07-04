@@ -801,7 +801,6 @@ fn build_final_agent_run_json(
                 "toolResults": [],
                 "approvals": [],
                 "diffs": [],
-                "commandOutputs": [],
                 "timeline": []
             })
         });
@@ -830,9 +829,6 @@ fn build_final_agent_run_json(
         .or_insert_with(|| json!(agent_output.proposed_actions));
     object
         .entry("diffs".to_string())
-        .or_insert_with(|| json!([]));
-    object
-        .entry("commandOutputs".to_string())
         .or_insert_with(|| json!([]));
     object
         .entry("timeline".to_string())

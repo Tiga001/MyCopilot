@@ -272,15 +272,7 @@ fn is_image_extension(path: &Path) -> bool {
 fn is_readable_file_extension(path: &Path) -> bool {
     matches!(
         extension(path).as_str(),
-        "pdf"
-            | "doc"
-            | "docx"
-            | "ppt"
-            | "pptx"
-            | "xls"
-            | "xlsx"
-            | "csv"
-            | "tsv"
+        "pdf" | "doc" | "docx" | "ppt" | "pptx" | "xls" | "xlsx" | "csv" | "tsv"
     ) || is_text_extension(path)
 }
 

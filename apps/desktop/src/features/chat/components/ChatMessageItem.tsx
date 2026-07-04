@@ -6,7 +6,6 @@ import {
   Copy,
   Database,
   PencilLine,
-  SquareTerminal,
 } from "lucide-react";
 import type { AgentProposedAction, AgentToolCall, AgentUsage } from "@agent";
 import { useFrontendConfig } from "../../../config/FrontendConfigProvider";
@@ -35,6 +34,10 @@ import {
   ReadToolActivityGroup,
   type ReadToolActivityGroupItem,
 } from "./toolActivities/ReadToolActivity";
+import {
+  RunCommandToolActivityGroup,
+  type RunCommandToolActivityGroupItem,
+} from "./toolActivities/RunCommandToolActivity";
 import {
   getSearchKind,
   isSearchTool,
@@ -73,6 +76,11 @@ type RenderableTimelineItem =
       id: string;
       type: "search_group";
       kind: SearchKind;
+      callIds: string[];
+    }
+  | {
+      id: string;
+      type: "run_command_group";
       callIds: string[];
     };
 
@@ -190,9 +198,6 @@ function isTimelineItemRenderable(run: ChatAgentRunView, item: ChatAgentTimeline
   if (item.type === "tool_call") return run.toolCalls.some((candidate) => candidate.id === item.callId);
   if (item.type === "diff") return run.diffs.some((candidate) => candidate.id === item.diffId);
   if (item.type === "approval") return false;
-  if (item.type === "command_output") {
-    return run.commandOutputs.some((candidate) => candidate.id === item.outputId);
-  }
   return true;
 }
 
@@ -343,6 +348,28 @@ function groupTimelineItems(
       ];
     }
 
+    if (call.tool === "run_command") {
+      const previousItem = items[items.length - 1];
+      if (previousItem?.type === "run_command_group") {
+        return [
+          ...items.slice(0, -1),
+          {
+            ...previousItem,
+            callIds: [...previousItem.callIds, item.callId],
+          },
+        ];
+      }
+
+      return [
+        ...items,
+        {
+          id: `run-command-group-${item.callId}`,
+          type: "run_command_group",
+          callIds: [item.callId],
+        },
+      ];
+    }
+
     return [...items, item];
   }, []);
 }
@@ -371,6 +398,26 @@ function getSearchGroupItems(
   callIds: string[],
 ): SearchToolActivityGroupItem[] {
   return callIds.reduce<SearchToolActivityGroupItem[]>((items, callId) => {
+    const call = run.toolCalls.find((candidate) => candidate.id === callId);
+    if (!call) return items;
+    const result = getToolResult(run, call.id);
+
+    return [
+      ...items,
+      {
+        call,
+        cancelled: run.status === "cancelled" && !result,
+        result,
+      },
+    ];
+  }, []);
+}
+
+function getRunCommandGroupItems(
+  run: ChatAgentRunView,
+  callIds: string[],
+): RunCommandToolActivityGroupItem[] {
+  return callIds.reduce<RunCommandToolActivityGroupItem[]>((items, callId) => {
     const call = run.toolCalls.find((candidate) => candidate.id === callId);
     if (!call) return items;
     const result = getToolResult(run, call.id);
@@ -565,28 +612,6 @@ function AgentDiffActivity({ run, diffId }: { run: ChatAgentRunView; diffId: str
   );
 }
 
-function AgentCommandOutputActivity({ run, outputId }: { run: ChatAgentRunView; outputId: string }) {
-  const { t } = useFrontendConfig();
-  const output = run.commandOutputs.find((candidate) => candidate.id === outputId);
-  if (!output) return null;
-
-  return (
-    <AgentActivityDisclosure
-      hasDetails
-      icon={SquareTerminal}
-      label={formatTranslation(
-        t,
-        output.stream === "stderr" ? "agent.command.error" : "agent.command.output",
-        { command: output.command },
-      )}
-    >
-      <div className="agent-activity__details">
-        <pre>{output.output}</pre>
-      </div>
-    </AgentActivityDisclosure>
-  );
-}
-
 function AgentThinkingActivity() {
   const { t } = useFrontendConfig();
 
@@ -618,6 +643,12 @@ function AgentTimelineItemView({
     return <SearchToolActivityGroup items={items} kind={item.kind} />;
   }
 
+  if (item.type === "run_command_group") {
+    const items = getRunCommandGroupItems(run, item.callIds);
+    if (items.length === 0) return null;
+    return <RunCommandToolActivityGroup items={items} />;
+  }
+
   if (item.type === "message") {
     if (!item.content.trim()) return null;
     return <ChatMarkdown className="chat-agent-text" content={item.content} />;
@@ -646,10 +677,6 @@ function AgentTimelineItemView({
 
   if (item.type === "approval") {
     return null;
-  }
-
-  if (item.type === "command_output") {
-    return <AgentCommandOutputActivity outputId={item.outputId} run={run} />;
   }
 
   return (

@@ -8,6 +8,7 @@ use crate::storage::{chat_repository, now_ms, StorageState};
 use my_copilot_agent::{
     send_chat, AgentApprovalDecision, AgentApprovalDecisionStatus, AgentChatInput,
     AgentChatMessage, AgentChatOutput, AgentCommandRequest, AgentDiffProposal, AgentProposedAction,
+    AgentToolResult,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -32,6 +33,8 @@ pub struct AgentActionExecutionOutput {
     pub patch_result: Option<AgentPatchExecutionResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command_result: Option<AgentCommandExecutionResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_result: Option<AgentToolResult>,
     pub agent_output: AgentChatOutput,
 }
 
@@ -95,6 +98,10 @@ pub async fn reject_action(
     message: Option<String>,
 ) -> Result<AgentActionExecutionOutput, String> {
     let pending = action_state.take(&action_id)?;
+    if pending.tool_name == "run_command" {
+        return reject_command_action(action_state, storage_state, pending, message).await;
+    }
+
     let mut input = pending.input.clone();
     input.approval_decision = Some(AgentApprovalDecision {
         action_id: pending.action_id.clone(),
@@ -122,6 +129,57 @@ pub async fn reject_action(
         status: AgentActionExecutionStatus::Rejected,
         patch_result: None,
         command_result: None,
+        tool_result: None,
+        agent_output,
+    })
+}
+
+async fn reject_command_action(
+    action_state: &AgentActionState,
+    storage_state: &StorageState,
+    pending: PendingAgentAction,
+    message: Option<String>,
+) -> Result<AgentActionExecutionOutput, String> {
+    let rejected_message = message
+        .map(|message| message.trim().to_string())
+        .filter(|message| !message.is_empty());
+    let command = match &pending.action {
+        AgentProposedAction::Command { command } => Some(command),
+        _ => None,
+    };
+    let tool_result =
+        rejected_command_tool_result(&pending.action_id, command, rejected_message.clone());
+
+    let mut input = pending.input.clone();
+    input.approval_decision = Some(AgentApprovalDecision {
+        action_id: pending.action_id.clone(),
+        status: AgentApprovalDecisionStatus::Rejected,
+        message: rejected_message,
+    });
+    input.messages.push(AgentChatMessage {
+        role: "user".to_string(),
+        content: build_rejected_command_result_observation(&tool_result),
+    });
+
+    let agent_output = send_chat(input.clone())
+        .await
+        .map_err(|error| error.to_string())?;
+    action_state.store_output_actions_with_message(
+        &input,
+        &agent_output,
+        pending.conversation_id.clone(),
+        pending.assistant_message_id.clone(),
+    );
+    persist_assistant_output(storage_state, &pending, &agent_output);
+
+    Ok(AgentActionExecutionOutput {
+        action_id: pending.action_id,
+        action_type: pending.action_type,
+        tool_name: pending.tool_name,
+        status: AgentActionExecutionStatus::Rejected,
+        patch_result: None,
+        command_result: None,
+        tool_result: Some(tool_result),
         agent_output,
     })
 }
@@ -182,6 +240,7 @@ async fn approve_diff_action(
         status: execution.status,
         patch_result: Some(execution.result),
         command_result: None,
+        tool_result: None,
         agent_output,
     })
 }
@@ -233,6 +292,12 @@ async fn approve_command_action(
             &execution.result,
         ),
     });
+    let tool_result = command_tool_result(
+        &pending.action_id,
+        pending.tool_name.as_str(),
+        execution.observation_ok,
+        &execution.result,
+    );
 
     let agent_output = send_chat(input.clone())
         .await
@@ -252,6 +317,7 @@ async fn approve_command_action(
         status: execution.status,
         patch_result: None,
         command_result: Some(execution.result),
+        tool_result: Some(tool_result),
         agent_output,
     })
 }
@@ -266,6 +332,60 @@ struct CommandExecution {
     status: AgentActionExecutionStatus,
     observation_ok: bool,
     result: AgentCommandExecutionResult,
+}
+
+fn command_tool_result(
+    action_id: &str,
+    tool_name: &str,
+    observation_ok: bool,
+    command_result: &AgentCommandExecutionResult,
+) -> AgentToolResult {
+    AgentToolResult {
+        call_id: action_id.to_string(),
+        tool: tool_name.to_string(),
+        ok: observation_ok,
+        result: Some(json!(command_result)),
+        error: if observation_ok {
+            None
+        } else {
+            command_result
+                .error
+                .clone()
+                .or_else(|| Some("命令执行失败、超时、被取消或返回非零 exit code。".to_string()))
+        },
+    }
+}
+
+fn rejected_command_tool_result(
+    action_id: &str,
+    command: Option<&AgentCommandRequest>,
+    message: Option<String>,
+) -> AgentToolResult {
+    let mut result = json!({
+        "status": "rejected",
+    });
+
+    if let Some(object) = result.as_object_mut() {
+        if let Some(message) = message {
+            object.insert("message".to_string(), json!(message));
+        }
+
+        if let Some(command) = command {
+            object.insert("command".to_string(), json!(command.command));
+            object.insert("cwd".to_string(), json!(command.cwd));
+            object.insert("timeoutMs".to_string(), json!(command.timeout_ms));
+            object.insert("riskLevel".to_string(), json!(command.risk_level));
+            object.insert("reason".to_string(), json!(command.reason));
+        }
+    }
+
+    AgentToolResult {
+        call_id: action_id.to_string(),
+        tool: "run_command".to_string(),
+        ok: true,
+        result: Some(result),
+        error: None,
+    }
 }
 
 fn apply_patch_and_read_diff(root: &PathBuf, diff: &AgentDiffProposal) -> PatchExecution {
@@ -470,4 +590,94 @@ fn build_command_result_observation(
     format!(
         "Tool result observation from approved host command. Use stdout, stderr, exitCode, and timeout status to continue or repair.\n```json\n{payload}\n```"
     )
+}
+
+fn build_rejected_command_result_observation(tool_result: &AgentToolResult) -> String {
+    let payload = json!({
+        "type": "tool_result",
+        "tool": tool_result.tool,
+        "callId": tool_result.call_id,
+        "ok": tool_result.ok,
+        "result": tool_result.result,
+        "error": tool_result.error,
+    });
+    let payload = serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string());
+
+    format!(
+        "Tool result observation from rejected host command. The user rejected this run_command request. Do not request the same command again unless the user explicitly changes their decision. Respect the rejection message and continue with an alternative approach or ask a different approval request if needed.\n```json\n{payload}\n```"
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_tool_result_uses_run_command_call_id_and_result_payload() {
+        let command_result = AgentCommandExecutionResult {
+            command: "pnpm test".to_string(),
+            cwd: "/workspace".to_string(),
+            exit_code: Some(0),
+            stdout: "ok".to_string(),
+            stderr: String::new(),
+            timed_out: false,
+            cancelled: false,
+            duration_ms: 123,
+            stdout_truncated: false,
+            stderr_truncated: false,
+            error: None,
+        };
+
+        let result = command_tool_result("command-1", "run_command", true, &command_result);
+
+        assert_eq!(result.call_id, "command-1");
+        assert_eq!(result.tool, "run_command");
+        assert!(result.ok);
+        assert_eq!(result.result.as_ref().unwrap()["command"], "pnpm test");
+        assert_eq!(result.result.as_ref().unwrap()["exitCode"], 0);
+        assert!(result.error.is_none());
+    }
+
+    #[test]
+    fn rejected_command_tool_result_keeps_rejection_on_same_call() {
+        let command = AgentCommandRequest {
+            id: "command-1".to_string(),
+            command: "pnpm install".to_string(),
+            cwd: Some("/workspace".to_string()),
+            timeout_ms: Some(120_000),
+            approval_status: my_copilot_agent::AgentApprovalStatus::Required,
+            risk_level: None,
+            reason: Some("安装依赖".to_string()),
+        };
+        let result = rejected_command_tool_result(
+            "command-1",
+            Some(&command),
+            Some("先不要运行安装命令。".to_string()),
+        );
+
+        assert_eq!(result.call_id, "command-1");
+        assert_eq!(result.tool, "run_command");
+        assert!(result.ok);
+        assert_eq!(result.result.as_ref().unwrap()["status"], "rejected");
+        assert_eq!(result.result.as_ref().unwrap()["command"], "pnpm install");
+        assert_eq!(
+            result.result.as_ref().unwrap()["message"],
+            "先不要运行安装命令。"
+        );
+        assert!(result.error.is_none());
+    }
+
+    #[test]
+    fn rejected_command_observation_tells_agent_to_continue_without_repeating() {
+        let result = rejected_command_tool_result(
+            "command-1",
+            None,
+            Some("换一种不用安装依赖的做法。".to_string()),
+        );
+        let observation = build_rejected_command_result_observation(&result);
+
+        assert!(observation.contains("rejected host command"));
+        assert!(observation.contains("Do not request the same command again"));
+        assert!(observation.contains("换一种不用安装依赖的做法"));
+    }
 }

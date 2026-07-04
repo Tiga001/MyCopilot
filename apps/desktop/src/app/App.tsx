@@ -44,6 +44,7 @@ import type { SettingsPageId } from "../features/settings/SettingsPage";
 import { getAgentActionId, getErrorMessage } from "./agentActionUtils";
 import {
   appendTimelineItem,
+  applyAgentActionDecisionToChatMessage,
   applyAgentActionExecutionToChatMessage,
   applyAgentEventToChatMessage,
   applyAgentOutputToChatMessage,
@@ -203,7 +204,6 @@ function getImmediateAgentRunSignature(message: ChatMessage) {
     readActivities: run.readActivities ?? [],
     approvals: run.approvals,
     diffs: run.diffs,
-    commandOutputs: run.commandOutputs,
     timeline: run.timeline.map((item) =>
       item.type === "message"
         ? {
@@ -1583,8 +1583,16 @@ export function App() {
 
         while (actionToApprove && approvalSteps < AUTO_APPROVAL_MAX_STEPS) {
           approvalSteps += 1;
+          const currentAction = actionToApprove;
 
-          const execution = await approveAgentAction(getAgentActionId(actionToApprove));
+          updateAssistantMessage(
+            conversationId,
+            messageId,
+            (message) => applyAgentActionDecisionToChatMessage(message, currentAction, "approved"),
+            { touchConversation: true },
+          );
+
+          const execution = await approveAgentAction(getAgentActionId(currentAction));
           applyAgentExecutionToMessage(conversationId, messageId, execution);
 
           actionToApprove = getNextAutoApprovedAction(
@@ -1632,6 +1640,14 @@ export function App() {
       approvalAutoRulesRef.current.delete(messageId);
 
       try {
+        updateAssistantMessage(
+          conversationId,
+          messageId,
+          (currentMessage) =>
+            applyAgentActionDecisionToChatMessage(currentMessage, action, "rejected", message),
+          { touchConversation: true },
+        );
+
         const execution = await rejectAgentAction(getAgentActionId(action), message);
         applyAgentExecutionToMessage(conversationId, messageId, execution);
       } catch (error) {

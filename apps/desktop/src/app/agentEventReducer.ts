@@ -1,12 +1,13 @@
 import type {
   AgentActionExecutionOutput,
+  AgentApprovalStatus,
   AgentChatOutput,
-  AgentCommandExecutionResult,
   AgentEvent,
   AgentProposedAction,
+  AgentToolCall,
+  AgentToolResult,
 } from "@agent";
 import type {
-  ChatAgentCommandOutput,
   ChatAgentRunView,
   ChatAgentTimelineItem,
   ChatMessage,
@@ -40,7 +41,6 @@ function createAgentRun(
     toolResults: [],
     approvals: [],
     diffs: [],
-    commandOutputs: [],
     webSearchActivities: [],
     readActivities: [],
     timeline: [],
@@ -90,6 +90,10 @@ function upsertAgentAction(actions: AgentProposedAction[], nextAction: AgentProp
   return upsertById(actions, nextAction, getAgentActionId);
 }
 
+function removeAgentAction(actions: AgentProposedAction[], actionId: string) {
+  return actions.filter((action) => getAgentActionId(action) !== actionId);
+}
+
 export function appendTimelineItem(
   run: ChatAgentRunView,
   item: ChatAgentTimelineItem,
@@ -101,24 +105,155 @@ export function appendTimelineItem(
   return [...run.timeline, item];
 }
 
-function appendApprovalActionsToTimeline(
-  timeline: ChatAgentTimelineItem[],
-  actions: AgentProposedAction[],
+function removeTransientToolTimelineItems(timeline: ChatAgentTimelineItem[]) {
+  return timeline.filter((item) => item.type !== "approval");
+}
+
+function appendToolCallToTimeline(
+  run: ChatAgentRunView,
+  callId: string,
 ): ChatAgentTimelineItem[] {
-  return actions.reduce((currentTimeline, action) => {
-    const actionId = getAgentActionId(action);
-    const timelineItem: ChatAgentTimelineItem = {
-      id: `approval-${actionId}`,
-      type: "approval",
-      actionId,
+  return appendTimelineItem(
+    {
+      ...run,
+      timeline: removeTransientToolTimelineItems(run.timeline),
+    },
+    {
+      id: `tool-call-${callId}`,
+      type: "tool_call",
+      callId,
+    },
+  );
+}
+
+function getActionToolCall(action: AgentProposedAction): AgentToolCall | null {
+  if (action.type === "tool_call") return action.call;
+
+  if (action.type !== "command") return null;
+
+  return {
+    id: action.command.id,
+    tool: "run_command",
+    args: {
+      command: action.command.command,
+      cwd: action.command.cwd,
+      timeoutMs: action.command.timeoutMs,
+      riskLevel: action.command.riskLevel,
+      reason: action.command.reason,
+    },
+    approvalStatus: action.command.approvalStatus,
+    reason: action.command.reason,
+  };
+}
+
+function withActionApprovalStatus(
+  action: AgentProposedAction,
+  approvalStatus: AgentApprovalStatus,
+): AgentProposedAction {
+  if (action.type === "command") {
+    return {
+      ...action,
+      command: {
+        ...action.command,
+        approvalStatus,
+      },
     };
+  }
 
-    if (currentTimeline.some((item) => item.id === timelineItem.id)) {
-      return currentTimeline.map((item) => (item.id === timelineItem.id ? timelineItem : item));
-    }
+  if (action.type === "tool_call") {
+    return {
+      ...action,
+      call: {
+        ...action.call,
+        approvalStatus,
+      },
+    };
+  }
 
-    return [...currentTimeline, timelineItem];
-  }, timeline);
+  return {
+    ...action,
+    diff: {
+      ...action.diff,
+      approvalStatus,
+    },
+  };
+}
+
+function updateToolCallApprovalStatus(
+  toolCalls: AgentToolCall[],
+  action: AgentProposedAction,
+  approvalStatus: AgentApprovalStatus,
+) {
+  const actionId = getAgentActionId(action);
+  const actionCall = getActionToolCall(withActionApprovalStatus(action, approvalStatus));
+
+  if (actionCall) {
+    return upsertById(
+      toolCalls.map((call) =>
+        call.id === actionId
+          ? {
+              ...call,
+              approvalStatus,
+            }
+          : call,
+      ),
+      actionCall,
+      (call) => call.id,
+    );
+  }
+
+  return toolCalls;
+}
+
+function updateDiffApprovalStatus(
+  diffs: ChatAgentRunView["diffs"],
+  action: AgentProposedAction,
+  approvalStatus: AgentApprovalStatus,
+) {
+  if (action.type !== "diff") return diffs;
+
+  return upsertById(
+    diffs.map((diff) =>
+      diff.id === action.diff.id
+        ? {
+            ...diff,
+            approvalStatus,
+          }
+        : diff,
+    ),
+    {
+      ...action.diff,
+      approvalStatus,
+    },
+    (diff) => diff.id,
+  );
+}
+
+function createRejectedToolResult(
+  action: AgentProposedAction,
+  message?: string,
+): AgentToolResult | null {
+  const call = getActionToolCall(action);
+  if (!call) return null;
+
+  return {
+    callId: call.id,
+    tool: call.tool,
+    ok: true,
+    result: {
+      status: "rejected",
+      message,
+    },
+  };
+}
+
+function getApprovalsForStatus(
+  status: ChatAgentRunView["status"],
+  currentApprovals: AgentProposedAction[],
+  proposedActions: AgentProposedAction[],
+) {
+  if (status !== "waiting_for_approval") return [];
+  return proposedActions.reduce(upsertAgentAction, currentApprovals);
 }
 
 function appendMessageDeltaToTimeline(
@@ -281,20 +416,21 @@ export function applyAgentEventToChatMessage(message: ChatMessage, agentEvent: A
   }
 
   if (agentEvent.type === "tool_call") {
+    const runWithCleanTimeline = {
+      ...currentRun,
+      timeline: removeTransientToolTimelineItems(currentRun.timeline),
+    };
+
     return {
       ...message,
       status: "pending",
       agentRun: {
-        ...currentRun,
+        ...runWithCleanTimeline,
         status: "running",
         toolCalls: upsertById(currentRun.toolCalls, agentEvent.call, (call) => call.id),
         webSearchActivities: upsertWebSearchActivityFromCall(currentRun, agentEvent.call),
         readActivities: upsertReadActivityFromCall(currentRun, agentEvent.call),
-        timeline: appendTimelineItem(currentRun, {
-          id: `tool-call-${agentEvent.call.id}`,
-          type: "tool_call",
-          callId: agentEvent.call.id,
-        }),
+        timeline: appendToolCallToTimeline(runWithCleanTimeline, agentEvent.call.id),
       },
     };
   }
@@ -314,18 +450,23 @@ export function applyAgentEventToChatMessage(message: ChatMessage, agentEvent: A
   }
 
   if (agentEvent.type === "approval_required") {
+    const call = getActionToolCall(agentEvent.action);
+    const timeline = call
+      ? appendToolCallToTimeline(currentRun, call.id)
+      : removeTransientToolTimelineItems(currentRun.timeline);
+
     return {
       ...message,
       status: "pending",
       agentRun: {
         ...currentRun,
         status: "waiting_for_approval",
+        toolCalls: call
+          ? upsertById(currentRun.toolCalls, call, (candidate) => candidate.id)
+          : currentRun.toolCalls,
+        diffs: updateDiffApprovalStatus(currentRun.diffs, agentEvent.action, "required"),
         approvals: upsertAgentAction(currentRun.approvals, agentEvent.action),
-        timeline: appendTimelineItem(currentRun, {
-          id: `approval-${getAgentActionId(agentEvent.action)}`,
-          type: "approval",
-          actionId: getAgentActionId(agentEvent.action),
-        }),
+        timeline,
       },
     };
   }
@@ -348,27 +489,7 @@ export function applyAgentEventToChatMessage(message: ChatMessage, agentEvent: A
   }
 
   if (agentEvent.type === "command_output") {
-    const commandOutput: ChatAgentCommandOutput = {
-      id: `${agentEvent.runId}-command-output-${currentRun.commandOutputs.length + 1}`,
-      command: agentEvent.command,
-      stream: agentEvent.stream,
-      output: agentEvent.output,
-    };
-
-    return {
-      ...message,
-      status: "pending",
-      agentRun: {
-        ...currentRun,
-        status: "running",
-        commandOutputs: [...currentRun.commandOutputs, commandOutput],
-        timeline: appendTimelineItem(currentRun, {
-          id: `command-output-${commandOutput.id}`,
-          type: "command_output",
-          outputId: commandOutput.id,
-        }),
-      },
-    };
+    return message;
   }
 
   if (agentEvent.type === "error") {
@@ -415,8 +536,8 @@ export function applyAgentEventToChatMessage(message: ChatMessage, agentEvent: A
       completedAt,
       usage: agentEvent.usage ?? currentRun.usage,
       finishReason: agentEvent.finishReason,
-      approvals: proposedActions.reduce(upsertAgentAction, currentRun.approvals),
-      timeline: appendApprovalActionsToTimeline(currentRun.timeline, proposedActions),
+      approvals: getApprovalsForStatus(nextStatus, currentRun.approvals, proposedActions),
+      timeline: removeTransientToolTimelineItems(currentRun.timeline),
     },
   };
 }
@@ -452,46 +573,39 @@ export function applyAgentOutputToChatMessage(message: ChatMessage, output: Agen
       toolDefinitions: output.toolDefinitions,
       usage: output.usage ?? currentRun.usage,
       finishReason: output.finishReason,
-      approvals: output.proposedActions.reduce(upsertAgentAction, currentRun.approvals),
-      timeline: appendApprovalActionsToTimeline(currentRun.timeline, output.proposedActions),
+      approvals: getApprovalsForStatus(output.status, currentRun.approvals, output.proposedActions),
+      timeline: removeTransientToolTimelineItems(currentRun.timeline),
     },
   };
 }
 
-function createCommandOutputsFromExecution(
-  actionId: string,
-  commandResult: AgentCommandExecutionResult,
-): ChatAgentCommandOutput[] {
-  const outputs: ChatAgentCommandOutput[] = [];
+export function applyAgentActionDecisionToChatMessage(
+  message: ChatMessage,
+  action: AgentProposedAction,
+  decision: "approved" | "rejected",
+  rejectionMessage?: string,
+): ChatMessage {
+  const currentRun = ensureAgentRun(message.agentRun, null);
+  const actionId = getAgentActionId(action);
+  const approvalStatus: AgentApprovalStatus = decision === "approved" ? "approved" : "rejected";
+  const rejectedToolResult =
+    decision === "rejected" ? createRejectedToolResult(action, rejectionMessage) : null;
 
-  if (commandResult.stdout) {
-    outputs.push({
-      id: `${actionId}-stdout`,
-      command: commandResult.command,
-      stream: "stdout",
-      output: commandResult.stdout,
-    });
-  }
-
-  if (commandResult.stderr) {
-    outputs.push({
-      id: `${actionId}-stderr`,
-      command: commandResult.command,
-      stream: "stderr",
-      output: commandResult.stderr,
-    });
-  }
-
-  if (outputs.length === 0 && commandResult.error) {
-    outputs.push({
-      id: `${actionId}-error`,
-      command: commandResult.command,
-      stream: "stderr",
-      output: commandResult.error,
-    });
-  }
-
-  return outputs;
+  return {
+    ...message,
+    status: "pending",
+    agentRun: {
+      ...currentRun,
+      status: "running",
+      approvals: removeAgentAction(currentRun.approvals, actionId),
+      toolCalls: updateToolCallApprovalStatus(currentRun.toolCalls, action, approvalStatus),
+      toolResults: rejectedToolResult
+        ? upsertById(currentRun.toolResults, rejectedToolResult, (result) => result.callId)
+        : currentRun.toolResults,
+      diffs: updateDiffApprovalStatus(currentRun.diffs, action, approvalStatus),
+      timeline: removeTransientToolTimelineItems(currentRun.timeline),
+    },
+  };
 }
 
 export function applyAgentActionExecutionToChatMessage(
@@ -499,31 +613,44 @@ export function applyAgentActionExecutionToChatMessage(
   execution: AgentActionExecutionOutput,
 ): ChatMessage {
   const messageWithAgentOutput = applyAgentOutputToChatMessage(message, execution.agentOutput);
+  const currentRun = ensureAgentRun(messageWithAgentOutput.agentRun, execution.agentOutput.runId);
 
-  if (!execution.commandResult) {
-    return messageWithAgentOutput;
+  if (!execution.toolResult) {
+    return {
+      ...messageWithAgentOutput,
+      agentRun: {
+        ...currentRun,
+        approvals: currentRun.status === "waiting_for_approval"
+          ? currentRun.approvals
+          : removeAgentAction(currentRun.approvals, execution.actionId),
+        webSearchActivities: normalizeWebSearchActivities(currentRun),
+        readActivities: normalizeReadActivities(currentRun),
+        timeline: removeTransientToolTimelineItems(currentRun.timeline),
+      },
+    };
   }
 
-  const currentRun = ensureAgentRun(messageWithAgentOutput.agentRun, execution.agentOutput.runId);
-  const commandOutputs = createCommandOutputsFromExecution(execution.actionId, execution.commandResult);
+  const finalApprovalStatus: AgentApprovalStatus = execution.status === "rejected" ? "rejected" : "approved";
 
   return {
     ...messageWithAgentOutput,
     agentRun: {
       ...currentRun,
-      commandOutputs: [...currentRun.commandOutputs, ...commandOutputs],
+      toolCalls: currentRun.toolCalls.map((call) =>
+        call.id === execution.actionId
+          ? {
+              ...call,
+              approvalStatus: finalApprovalStatus,
+            }
+          : call,
+      ),
+      toolResults: upsertById(currentRun.toolResults, execution.toolResult, (result) => result.callId),
+      approvals: currentRun.status === "waiting_for_approval"
+        ? currentRun.approvals
+        : removeAgentAction(currentRun.approvals, execution.actionId),
       webSearchActivities: normalizeWebSearchActivities(currentRun),
       readActivities: normalizeReadActivities(currentRun),
-      timeline: [
-        ...currentRun.timeline,
-        ...commandOutputs.map(
-          (output): ChatAgentTimelineItem => ({
-            id: `command-output-${output.id}`,
-            type: "command_output",
-            outputId: output.id,
-          }),
-        ),
-      ],
+      timeline: removeTransientToolTimelineItems(currentRun.timeline),
     },
   };
 }

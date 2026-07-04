@@ -1,5 +1,4 @@
 import type {
-  AgentCommandOutputStream,
   AgentDiffProposal,
   AgentInputAttachment,
   AgentProposedAction,
@@ -10,13 +9,6 @@ import type {
   AgentToolResult,
   AgentUsage,
 } from "@agent";
-
-export interface ChatAgentCommandOutput {
-  id: string;
-  command: string;
-  stream: AgentCommandOutputStream;
-  output: string;
-}
 
 export interface ChatWebSearchSource {
   id: string;
@@ -72,7 +64,6 @@ export type ChatAgentTimelineItem =
   | { id: string; type: "tool_call"; callId: string }
   | { id: string; type: "diff"; diffId: string }
   | { id: string; type: "approval"; actionId: string }
-  | { id: string; type: "command_output"; outputId: string }
   | { id: string; type: "error"; message: string };
 
 export interface ChatAgentRunView {
@@ -89,7 +80,6 @@ export interface ChatAgentRunView {
   readActivities?: ChatReadActivity[];
   approvals: AgentProposedAction[];
   diffs: AgentDiffProposal[];
-  commandOutputs: ChatAgentCommandOutput[];
   timeline: ChatAgentTimelineItem[];
   state?: AgentStateSnapshot;
   error?: string;
