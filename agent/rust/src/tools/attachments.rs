@@ -16,7 +16,7 @@ impl AgentTool for AttachmentsListTool {
     fn definition(&self) -> AgentToolDefinition {
         AgentToolDefinition {
             name: "attachments_list".to_string(),
-            description: "List files and images attached to the current conversation. Returns @attachments read paths that can be passed to read_image/read_file/read_pdf/read_word/read_presentation/read_spreadsheet.".to_string(),
+            description: "List files and images attached to the current conversation only. Use this for attachments shared in this chat. Returns @attachments read paths that can be passed to read_image/read_file/read_pdf/read_word/read_presentation/read_spreadsheet.".to_string(),
             input_schema: attachment_list_schema(),
             safety: AgentToolSafety::ReadOnly,
             requires_workspace: false,
@@ -25,7 +25,12 @@ impl AgentTool for AttachmentsListTool {
     }
 
     fn execute(&self, context: &ToolExecutionContext, args: Value) -> AgentResult<Value> {
-        list_attachments("conversation", context.conversation_attachments(), args)
+        list_attachments(
+            "current_conversation",
+            "Attachments from the current chat only.",
+            context.conversation_attachments(),
+            args,
+        )
     }
 }
 
@@ -33,7 +38,7 @@ impl AgentTool for AttachmentsListProjectTool {
     fn definition(&self) -> AgentToolDefinition {
         AgentToolDefinition {
             name: "attachments_list_project".to_string(),
-            description: "List files and images attached to conversations in the current project. Returns @attachments read paths that can be passed to read_image/read_file/read_pdf/read_word/read_presentation/read_spreadsheet.".to_string(),
+            description: "List files and images attached to other conversations in the current project, excluding the current conversation. Use this to discover historical project attachments from other chats. Returns @attachments read paths that can be passed to read_image/read_file/read_pdf/read_word/read_presentation/read_spreadsheet.".to_string(),
             input_schema: attachment_list_schema(),
             safety: AgentToolSafety::ReadOnly,
             requires_workspace: false,
@@ -42,7 +47,12 @@ impl AgentTool for AttachmentsListProjectTool {
     }
 
     fn execute(&self, context: &ToolExecutionContext, args: Value) -> AgentResult<Value> {
-        list_attachments("project", context.project_attachments(), args)
+        list_attachments(
+            "project_other_conversations",
+            "Attachments from other conversations in the same project; current chat attachments are intentionally excluded.",
+            context.project_attachments(),
+            args,
+        )
     }
 }
 
@@ -74,6 +84,7 @@ fn attachment_list_schema() -> Value {
 
 fn list_attachments(
     scope: &str,
+    scope_note: &str,
     attachments: &[AgentAttachmentReference],
     args: Value,
 ) -> AgentResult<Value> {
@@ -100,6 +111,7 @@ fn list_attachments(
 
     Ok(json!({
         "scope": scope,
+        "scopeNote": scope_note,
         "library": {
             "path": "@attachments",
             "note": "This is a virtual attachment-library path. Use each attachment's readPath with the read_* tools; do not treat it as a workspace path."

@@ -7,19 +7,20 @@ use crate::storage::models::{
 };
 use crate::storage::{
     agent_prompt_preferences_repository, attachment_repository, chat_repository, config_repository,
-    now_ms, project_repository, storage_error, StorageState,
+    now_ms, project_repository, storage_error, usage_repository, StorageState,
 };
 use base64::Engine;
 use my_copilot_agent::{
     next_run_id, send_chat_with_events_and_cancellation, AgentAttachmentLibraryContext,
-    AgentAttachmentReference, AgentCancellationToken, AgentChatInput, AgentChatMessage, AgentEvent,
-    AgentEventEmitter, AgentInputAttachment, AgentInputAttachmentEncoding,
-    AgentInputAttachmentKind, AgentPromptDetailLevel, AgentPromptPreferences, AgentPromptTone,
-    AgentPromptWorkMode, AgentRunContext, AgentRunMode, AgentRunStatus, AgentSearchConfig,
-    AgentSearchMode, AgentWorkspaceContext,
+    AgentAttachmentReference, AgentCancellationToken, AgentChatInput, AgentChatMessage,
+    AgentChatOutput, AgentEvent, AgentEventEmitter, AgentInputAttachment,
+    AgentInputAttachmentEncoding, AgentInputAttachmentKind, AgentPromptDetailLevel,
+    AgentPromptPreferences, AgentPromptTone, AgentPromptWorkMode, AgentRunContext, AgentRunMode,
+    AgentRunStatus, AgentSearchConfig, AgentSearchMode, AgentWorkspaceContext,
 };
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -92,6 +93,17 @@ pub struct AgentConversationTurnOutput {
 struct PreparedConversationTurn {
     output: AgentConversationTurnOutput,
     agent_input: AgentChatInput,
+    usage_context: AgentUsagePersistenceContext,
+}
+
+#[derive(Clone)]
+struct AgentUsagePersistenceContext {
+    project_id: Option<String>,
+    model_id: String,
+    model_name: String,
+    provider_path: Option<String>,
+    input_price: String,
+    output_price: String,
 }
 
 #[tauri::command]
@@ -120,6 +132,7 @@ pub async fn agent_start_conversation_turn(
     };
     let output = prepared.output.clone();
     let worker_input = prepared.agent_input.clone();
+    let usage_context = prepared.usage_context.clone();
     let worker_run_id = run_id.clone();
     let worker_window = window.clone();
     let app_handle = window.app_handle().clone();
@@ -161,11 +174,12 @@ pub async fn agent_start_conversation_turn(
         {
             Ok(agent_output) => {
                 if !cancel_flag.load(Ordering::SeqCst) {
-                    persist_assistant_output(
+                    persist_final_assistant_output(
                         &app_handle,
                         &conversation_id,
                         &assistant_message_id,
-                        &agent_output.content,
+                        &agent_output,
+                        &usage_context,
                         status_for_run(agent_output.status),
                     );
 
@@ -408,6 +422,14 @@ fn prepare_conversation_turn(
             assistant_message,
         },
         agent_input,
+        usage_context: AgentUsagePersistenceContext {
+            project_id: resolved_project_id,
+            model_id: model.id.clone(),
+            model_name: model.display_name.clone(),
+            provider_path: model.provider_path.clone(),
+            input_price: model.input_price.clone(),
+            output_price: model.output_price.clone(),
+        },
     })
 }
 
@@ -506,11 +528,15 @@ fn build_attachment_library_context(
             .map(agent_attachment_reference)
             .collect::<Vec<_>>();
     let project_attachments = if let Some(project_id) = project_id {
-        attachment_repository::list_project_attachments(connection, project_id)
-            .map_err(storage_error)?
-            .into_iter()
-            .map(agent_attachment_reference)
-            .collect::<Vec<_>>()
+        attachment_repository::list_project_attachments_excluding_conversation(
+            connection,
+            project_id,
+            conversation_id,
+        )
+        .map_err(storage_error)?
+        .into_iter()
+        .map(agent_attachment_reference)
+        .collect::<Vec<_>>()
     } else {
         Vec::new()
     };
@@ -710,6 +736,158 @@ fn persist_assistant_output(
         status,
         now_ms(),
     );
+}
+
+fn persist_final_assistant_output(
+    app_handle: &tauri::AppHandle,
+    conversation_id: &str,
+    assistant_message_id: &str,
+    agent_output: &AgentChatOutput,
+    usage_context: &AgentUsagePersistenceContext,
+    status: Option<&str>,
+) {
+    let storage_state = app_handle.state::<StorageState>();
+    let Ok(connection) = storage_state.connection() else {
+        return;
+    };
+    let existing_agent_run_json = chat_repository::get_conversation(&connection, conversation_id)
+        .ok()
+        .flatten()
+        .and_then(|conversation| {
+            conversation
+                .messages
+                .into_iter()
+                .find(|message| message.id == assistant_message_id)
+        })
+        .and_then(|message| message.agent_run_json);
+    let completed_at = now_ms();
+    let agent_run_json = build_final_agent_run_json(
+        existing_agent_run_json.as_deref(),
+        agent_output,
+        completed_at,
+    );
+
+    let _ = chat_repository::update_message_status_content_and_agent_run(
+        &connection,
+        conversation_id,
+        assistant_message_id,
+        &agent_output.content,
+        status,
+        agent_run_json.as_deref(),
+        completed_at,
+    );
+    persist_usage_record(
+        &connection,
+        conversation_id,
+        assistant_message_id,
+        agent_output,
+        usage_context,
+        completed_at,
+    );
+}
+
+fn build_final_agent_run_json(
+    existing_agent_run_json: Option<&str>,
+    agent_output: &AgentChatOutput,
+    completed_at: i64,
+) -> Option<String> {
+    let mut value = existing_agent_run_json
+        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+        .filter(Value::is_object)
+        .unwrap_or_else(|| {
+            json!({
+                "toolDefinitions": [],
+                "toolCalls": [],
+                "toolResults": [],
+                "approvals": [],
+                "diffs": [],
+                "commandOutputs": [],
+                "timeline": []
+            })
+        });
+    let object = value.as_object_mut()?;
+
+    object.insert("runId".to_string(), json!(agent_output.run_id));
+    object.insert("status".to_string(), json!(agent_output.status));
+    object.insert("completedAt".to_string(), json!(completed_at));
+    if let Some(usage) = &agent_output.usage {
+        object.insert("usage".to_string(), serde_json::to_value(usage).ok()?);
+    }
+    if let Some(finish_reason) = &agent_output.finish_reason {
+        object.insert("finishReason".to_string(), json!(finish_reason));
+    }
+    object
+        .entry("toolDefinitions".to_string())
+        .or_insert_with(|| json!(agent_output.tool_definitions));
+    object
+        .entry("toolCalls".to_string())
+        .or_insert_with(|| json!([]));
+    object
+        .entry("toolResults".to_string())
+        .or_insert_with(|| json!([]));
+    object
+        .entry("approvals".to_string())
+        .or_insert_with(|| json!(agent_output.proposed_actions));
+    object
+        .entry("diffs".to_string())
+        .or_insert_with(|| json!([]));
+    object
+        .entry("commandOutputs".to_string())
+        .or_insert_with(|| json!([]));
+    object
+        .entry("timeline".to_string())
+        .or_insert_with(|| json!([]));
+
+    serde_json::to_string(&value).ok()
+}
+
+fn persist_usage_record(
+    connection: &Connection,
+    conversation_id: &str,
+    assistant_message_id: &str,
+    agent_output: &AgentChatOutput,
+    usage_context: &AgentUsagePersistenceContext,
+    created_at: i64,
+) {
+    let Some(usage) = &agent_output.usage else {
+        return;
+    };
+    if usage.input_tokens.is_none()
+        && usage.output_tokens.is_none()
+        && usage.total_tokens.is_none()
+        && usage.cached_input_tokens.is_none()
+        && usage.cache_creation_input_tokens.is_none()
+    {
+        return;
+    }
+
+    let estimated_cost = usage_repository::estimate_usage_cost(
+        usage.input_tokens,
+        usage.output_tokens,
+        &usage_context.input_price,
+        &usage_context.output_price,
+    );
+    let record = usage_repository::AgentUsageRecordInsert {
+        id: format!("usage-{assistant_message_id}"),
+        conversation_id: conversation_id.to_string(),
+        message_id: assistant_message_id.to_string(),
+        run_id: agent_output.run_id.clone(),
+        project_id: usage_context.project_id.clone(),
+        model_id: usage_context.model_id.clone(),
+        model_name: usage_context.model_name.clone(),
+        provider_path: usage_context.provider_path.clone(),
+        created_at,
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        total_tokens: usage.total_tokens,
+        cached_input_tokens: usage.cached_input_tokens,
+        cache_creation_input_tokens: usage.cache_creation_input_tokens,
+        billable_request_count: usage.billable_request_count.unwrap_or(1),
+        input_price: Some(usage_context.input_price.clone()),
+        output_price: Some(usage_context.output_price.clone()),
+        estimated_cost,
+    };
+    let _ = usage_repository::upsert_usage_record(connection, &record);
 }
 
 fn emit_agent_error(window: &Window, run_id: &str, message: String) {

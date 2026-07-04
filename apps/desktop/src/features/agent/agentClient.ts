@@ -3,12 +3,18 @@ import {
   approveAgentActionWithInvoker,
   cancelAgentActionWithInvoker,
   cancelAgentRunWithInvoker,
+  clearAgentUsageRecordsWithInvoker,
+  getAgentUsageSummaryWithInvoker,
   listPendingAgentActionsWithInvoker,
   rejectAgentActionWithInvoker,
   startAgentConversationTurnWithInvoker,
 } from "@agent";
 import type {
   AgentActionExecutionOutput,
+  AgentUsageClearInput,
+  AgentUsageClearOutput,
+  AgentUsageSummaryInput,
+  AgentUsageSummaryOutput,
   AgentConversationTurnInput,
   AgentConversationTurnOutput,
   PendingAgentActionSnapshot,
@@ -44,4 +50,16 @@ export async function cancelAgentAction(actionId: string): Promise<boolean> {
 
 export async function cancelAgentRun(runId: string): Promise<boolean> {
   return cancelAgentRunWithInvoker(invoke, runId);
+}
+
+export async function getAgentUsageSummary(
+  input: AgentUsageSummaryInput,
+): Promise<AgentUsageSummaryOutput> {
+  return getAgentUsageSummaryWithInvoker(invoke, input);
+}
+
+export async function clearAgentUsageRecords(
+  input: AgentUsageClearInput = {},
+): Promise<AgentUsageClearOutput> {
+  return clearAgentUsageRecordsWithInvoker(invoke, input);
 }

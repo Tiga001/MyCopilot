@@ -3,6 +3,10 @@ import type {
   AgentConversationTurnInput,
   AgentConversationTurnOutput,
   AgentProposedAction,
+  AgentUsageClearInput,
+  AgentUsageClearOutput,
+  AgentUsageSummaryInput,
+  AgentUsageSummaryOutput,
 } from "./protocol";
 
 export const AGENT_EVENT_NAME = "agent_event";
@@ -101,4 +105,18 @@ export async function cancelAgentRunWithInvoker(
   runId: string,
 ): Promise<boolean> {
   return invokeAgentCommand<boolean>("agent_cancel_run", { runId });
+}
+
+export async function getAgentUsageSummaryWithInvoker(
+  invokeAgentCommand: AgentCommandInvoker,
+  input: AgentUsageSummaryInput,
+): Promise<AgentUsageSummaryOutput> {
+  return invokeAgentCommand<AgentUsageSummaryOutput>("agent_get_usage_summary", { input });
+}
+
+export async function clearAgentUsageRecordsWithInvoker(
+  invokeAgentCommand: AgentCommandInvoker,
+  input: AgentUsageClearInput = {},
+): Promise<AgentUsageClearOutput> {
+  return invokeAgentCommand<AgentUsageClearOutput>("agent_clear_usage_records", { input });
 }

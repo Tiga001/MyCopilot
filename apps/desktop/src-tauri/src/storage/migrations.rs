@@ -109,6 +109,29 @@ pub fn run_migrations(connection: &Connection) -> rusqlite::Result<()> {
             updated_at INTEGER NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS agent_usage_records (
+            id TEXT PRIMARY KEY,
+            conversation_id TEXT NOT NULL,
+            message_id TEXT NOT NULL,
+            run_id TEXT NOT NULL,
+            project_id TEXT,
+            model_id TEXT NOT NULL,
+            model_name TEXT NOT NULL,
+            provider_path TEXT,
+            created_at INTEGER NOT NULL,
+            input_tokens INTEGER,
+            output_tokens INTEGER,
+            total_tokens INTEGER,
+            cached_input_tokens INTEGER,
+            cache_creation_input_tokens INTEGER,
+            billable_request_count INTEGER NOT NULL DEFAULT 1,
+            input_price TEXT,
+            output_price TEXT,
+            estimated_cost REAL,
+            UNIQUE(conversation_id, message_id),
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+        );
+
         CREATE TABLE IF NOT EXISTS maintenance_tasks (
             id TEXT PRIMARY KEY,
             completed_at INTEGER NOT NULL
@@ -137,6 +160,12 @@ pub fn run_migrations(connection: &Connection) -> rusqlite::Result<()> {
         "ui_preferences",
         "native_font_smoothing",
         "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    add_column_if_missing(
+        connection,
+        "ui_preferences",
+        "show_token_usage_details",
+        "INTEGER NOT NULL DEFAULT 1",
     )?;
     add_column_if_missing(
         connection,
@@ -183,6 +212,9 @@ pub fn run_migrations(connection: &Connection) -> rusqlite::Result<()> {
         CREATE INDEX IF NOT EXISTS idx_attachments_conversation_id ON attachments(conversation_id, created_at);
         CREATE INDEX IF NOT EXISTS idx_attachments_project_id ON attachments(project_id, created_at);
         CREATE INDEX IF NOT EXISTS idx_attachments_message_id ON attachments(message_id);
+        CREATE INDEX IF NOT EXISTS idx_agent_usage_records_created_at ON agent_usage_records(created_at);
+        CREATE INDEX IF NOT EXISTS idx_agent_usage_records_model_id ON agent_usage_records(model_id);
+        CREATE INDEX IF NOT EXISTS idx_agent_usage_records_project_id ON agent_usage_records(project_id);
         CREATE INDEX IF NOT EXISTS idx_composer_drafts_updated_at ON composer_drafts(updated_at);
         ",
     )?;

@@ -3,7 +3,7 @@ use my_copilot_agent::{
     AgentInputAttachment, AgentInputAttachmentEncoding, AgentInputAttachmentKind,
 };
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const MAX_ATTACHMENT_BYTES: u64 = 8 * 1024 * 1024;
 
@@ -161,6 +161,28 @@ pub fn select_agent_input_attachments(
         .collect()
 }
 
+#[tauri::command]
+pub fn load_agent_input_attachments_from_paths(
+    paths: Vec<String>,
+) -> Result<Vec<AgentInputAttachment>, String> {
+    paths
+        .iter()
+        .enumerate()
+        .map(|(index, path)| {
+            let path = PathBuf::from(path);
+            let kind = infer_attachment_kind(&path).ok_or_else(|| {
+                format!(
+                    "不支持的附件类型：{}",
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("未知文件")
+                )
+            })?;
+            attachment_from_path(kind, &path, index)
+        })
+        .collect()
+}
+
 fn attachment_from_path(
     kind: AgentInputAttachmentKind,
     path: &Path,
@@ -213,6 +235,53 @@ fn extension(path: &Path) -> String {
         .and_then(|extension| extension.to_str())
         .map(|extension| extension.to_ascii_lowercase())
         .unwrap_or_default()
+}
+
+fn infer_attachment_kind(path: &Path) -> Option<AgentInputAttachmentKind> {
+    if is_image_extension(path) {
+        return Some(AgentInputAttachmentKind::Image);
+    }
+
+    if is_readable_file_extension(path) {
+        return Some(AgentInputAttachmentKind::File);
+    }
+
+    None
+}
+
+fn is_image_extension(path: &Path) -> bool {
+    matches!(
+        extension(path).as_str(),
+        "apng"
+            | "avif"
+            | "bmp"
+            | "gif"
+            | "heic"
+            | "heif"
+            | "ico"
+            | "jpg"
+            | "jpeg"
+            | "png"
+            | "svg"
+            | "tif"
+            | "tiff"
+            | "webp"
+    )
+}
+
+fn is_readable_file_extension(path: &Path) -> bool {
+    matches!(
+        extension(path).as_str(),
+        "pdf"
+            | "doc"
+            | "docx"
+            | "ppt"
+            | "pptx"
+            | "xls"
+            | "xlsx"
+            | "csv"
+            | "tsv"
+    ) || is_text_extension(path)
 }
 
 fn infer_mime_type(path: &Path, kind: AgentInputAttachmentKind) -> Option<String> {

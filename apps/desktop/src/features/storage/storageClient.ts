@@ -118,6 +118,7 @@ export interface UiPreferencesSnapshot {
   sidebarProjectOrder: string[];
   sidebarSectionOrder: SidebarSectionOrder;
   nativeFontSmoothing: boolean;
+  showTokenUsageDetails: boolean;
   translucentSidebar: boolean;
   updatedAt: number;
 }
@@ -522,6 +523,7 @@ export function defaultUiPreferences(): UiPreferencesSnapshot {
     sidebarProjectOrder: [],
     sidebarSectionOrder: "projects_first",
     nativeFontSmoothing: false,
+    showTokenUsageDetails: true,
     translucentSidebar: false,
     updatedAt: 0,
   };
@@ -547,6 +549,10 @@ function normalizeUiPreferences(preferences: UiPreferencesSnapshot | null | unde
     sidebarSectionOrder:
       preferences.sidebarSectionOrder === "conversations_first" ? "conversations_first" : "projects_first",
     nativeFontSmoothing: Boolean(preferences.nativeFontSmoothing),
+    showTokenUsageDetails:
+      typeof preferences.showTokenUsageDetails === "boolean"
+        ? preferences.showTokenUsageDetails
+        : defaults.showTokenUsageDetails,
     translucentSidebar: Boolean(preferences.translucentSidebar),
     updatedAt: preferences.updatedAt ?? 0,
   };

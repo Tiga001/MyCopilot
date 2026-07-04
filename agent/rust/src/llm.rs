@@ -1,5 +1,6 @@
 use crate::cancellation::AgentCancellationToken;
 use crate::protocol::{AgentApiStyle, AgentError, AgentResult, AgentToolDefinition, AgentUsage};
+use crate::usage::{extract_anthropic_stream_usage, extract_usage, merge_stream_usage};
 use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use serde_json::{json, Map, Value};
@@ -471,7 +472,7 @@ impl OpenAiStreamAccumulator {
     where
         F: FnMut(String),
     {
-        merge_optional_usage(&mut self.usage, extract_usage(value));
+        merge_stream_usage(&mut self.usage, extract_usage(value));
 
         let Some(choices) = value.get("choices").and_then(Value::as_array) else {
             return Ok(());
@@ -584,7 +585,7 @@ impl AnthropicStreamAccumulator {
 
         match event_kind {
             "message_start" => {
-                merge_optional_usage(&mut self.usage, extract_anthropic_stream_usage(value));
+                merge_stream_usage(&mut self.usage, extract_anthropic_stream_usage(value));
             }
             "content_block_start" => {
                 self.process_content_block_start(value, on_delta)?;
@@ -600,7 +601,7 @@ impl AnthropicStreamAccumulator {
                 {
                     self.finish_reason = Some(reason.to_string());
                 }
-                merge_optional_usage(&mut self.usage, extract_anthropic_stream_usage(value));
+                merge_stream_usage(&mut self.usage, extract_anthropic_stream_usage(value));
             }
             "error" => {
                 let message = value
@@ -748,32 +749,6 @@ fn append_stream_fragment(target: &mut String, fragment: &str) {
     }
 }
 
-fn merge_optional_usage(target: &mut Option<AgentUsage>, next: Option<AgentUsage>) {
-    let Some(next) = next else {
-        return;
-    };
-    let existing = target.take();
-    let input_tokens = next
-        .input_tokens
-        .or_else(|| existing.as_ref().and_then(|usage| usage.input_tokens));
-    let output_tokens = next
-        .output_tokens
-        .or_else(|| existing.as_ref().and_then(|usage| usage.output_tokens));
-    let total_tokens = next
-        .total_tokens
-        .or_else(|| existing.as_ref().and_then(|usage| usage.total_tokens))
-        .or_else(|| match (input_tokens, output_tokens) {
-            (Some(input), Some(output)) => Some(input + output),
-            _ => None,
-        });
-
-    *target = Some(AgentUsage {
-        input_tokens,
-        output_tokens,
-        total_tokens,
-    });
-}
-
 pub(crate) fn detect_api_style(api_url: &str) -> AgentApiStyle {
     let normalized = api_url.to_ascii_lowercase();
 
@@ -802,6 +777,12 @@ fn build_payload(request: &LlmChatRequest) -> Value {
             ]);
             if should_send_temperature(&request.model) {
                 payload.insert("temperature".to_string(), json!(request.temperature));
+            }
+            if request.stream {
+                payload.insert(
+                    "stream_options".to_string(),
+                    json!({ "include_usage": true }),
+                );
             }
 
             if !request.tools.is_empty() {
@@ -1139,50 +1120,6 @@ fn extract_content_text(content: &Value) -> Option<String> {
     Some(text)
 }
 
-fn extract_usage(value: &Value) -> Option<AgentUsage> {
-    usage_from_usage_value(value.get("usage")?)
-}
-
-fn extract_anthropic_stream_usage(value: &Value) -> Option<AgentUsage> {
-    value
-        .get("usage")
-        .and_then(usage_from_usage_value)
-        .or_else(|| {
-            value
-                .get("message")
-                .and_then(|message| message.get("usage"))
-                .and_then(usage_from_usage_value)
-        })
-}
-
-fn usage_from_usage_value(usage: &Value) -> Option<AgentUsage> {
-    let input_tokens = usage
-        .get("prompt_tokens")
-        .or_else(|| usage.get("input_tokens"))
-        .and_then(Value::as_u64);
-    let output_tokens = usage
-        .get("completion_tokens")
-        .or_else(|| usage.get("output_tokens"))
-        .and_then(Value::as_u64);
-    let total_tokens = usage
-        .get("total_tokens")
-        .and_then(Value::as_u64)
-        .or_else(|| match (input_tokens, output_tokens) {
-            (Some(input), Some(output)) => Some(input + output),
-            _ => None,
-        });
-
-    if input_tokens.is_none() && output_tokens.is_none() && total_tokens.is_none() {
-        return None;
-    }
-
-    Some(AgentUsage {
-        input_tokens,
-        output_tokens,
-        total_tokens,
-    })
-}
-
 fn extract_finish_reason(value: &Value) -> Option<String> {
     if let Some(reason) = value.get("stop_reason").and_then(Value::as_str) {
         return Some(reason.to_string());
@@ -1389,6 +1326,7 @@ mod tests {
         let payload = build_payload(&request);
 
         assert!(payload.get("temperature").is_none());
+        assert_eq!(payload["stream_options"]["include_usage"], true);
     }
 
     #[test]
@@ -1687,17 +1625,30 @@ mod tests {
             "usage": {
                 "prompt_tokens": 7,
                 "completion_tokens": 5,
-                "total_tokens": 12
+                "total_tokens": 12,
+                "prompt_tokens_details": {
+                    "cached_tokens": 2
+                }
             }
         });
         let anthropic = json!({
             "usage": {
                 "input_tokens": 3,
-                "output_tokens": 4
+                "output_tokens": 4,
+                "cache_read_input_tokens": 2,
+                "cache_creation_input_tokens": 1
             }
         });
 
-        assert_eq!(extract_usage(&openai).unwrap().total_tokens, Some(12));
-        assert_eq!(extract_usage(&anthropic).unwrap().total_tokens, Some(7));
+        let openai_usage = extract_usage(&openai).unwrap();
+        assert_eq!(openai_usage.total_tokens, Some(12));
+        assert_eq!(openai_usage.cached_input_tokens, Some(2));
+        assert_eq!(openai_usage.billable_request_count, Some(1));
+
+        let anthropic_usage = extract_usage(&anthropic).unwrap();
+        assert_eq!(anthropic_usage.total_tokens, Some(7));
+        assert_eq!(anthropic_usage.cached_input_tokens, Some(2));
+        assert_eq!(anthropic_usage.cache_creation_input_tokens, Some(1));
+        assert_eq!(anthropic_usage.billable_request_count, Some(1));
     }
 }

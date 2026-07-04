@@ -284,6 +284,34 @@ pub fn update_message_status_and_content(
     Ok(())
 }
 
+pub fn update_message_status_content_and_agent_run(
+    connection: &Connection,
+    conversation_id: &str,
+    message_id: &str,
+    content: &str,
+    status: Option<&str>,
+    agent_run_json: Option<&str>,
+    updated_at: i64,
+) -> rusqlite::Result<()> {
+    connection.execute(
+        "
+        UPDATE messages
+        SET content = ?1, status = ?2, agent_run_json = ?3
+        WHERE conversation_id = ?4 AND id = ?5
+        ",
+        params![content, status, agent_run_json, conversation_id, message_id],
+    )?;
+    connection.execute(
+        "
+        UPDATE conversations
+        SET updated_at = ?1
+        WHERE id = ?2
+        ",
+        params![updated_at, conversation_id],
+    )?;
+    Ok(())
+}
+
 pub fn update_message_state(
     connection: &Connection,
     conversation_id: &str,

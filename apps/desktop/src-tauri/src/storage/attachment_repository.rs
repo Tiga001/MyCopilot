@@ -78,9 +78,10 @@ pub fn list_conversation_attachments(
     attachments
 }
 
-pub fn list_project_attachments(
+pub fn list_project_attachments_excluding_conversation(
     connection: &Connection,
     project_id: &str,
+    excluded_conversation_id: &str,
 ) -> rusqlite::Result<Vec<AttachmentRecord>> {
     let mut statement = connection.prepare(
         "
@@ -97,12 +98,16 @@ pub fn list_project_attachments(
             created_at
         FROM attachments
         WHERE project_id = ?1
+            AND conversation_id != ?2
         ORDER BY created_at DESC, id ASC
         ",
     )?;
 
     let attachments = statement
-        .query_map(params![project_id], attachment_from_row)?
+        .query_map(
+            params![project_id, excluded_conversation_id],
+            attachment_from_row,
+        )?
         .collect();
 
     attachments
@@ -169,4 +174,79 @@ fn attachment_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AttachmentRe
         storage_rel_path: row.get(8)?,
         created_at: row.get(9)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn project_attachment_query_excludes_current_conversation() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "
+                CREATE TABLE attachments (
+                    id TEXT PRIMARY KEY,
+                    conversation_id TEXT NOT NULL,
+                    message_id TEXT NOT NULL,
+                    project_id TEXT,
+                    kind TEXT NOT NULL,
+                    original_name TEXT NOT NULL,
+                    mime_type TEXT,
+                    size_bytes INTEGER NOT NULL,
+                    storage_rel_path TEXT NOT NULL,
+                    created_at INTEGER NOT NULL
+                );
+                ",
+            )
+            .unwrap();
+
+        save_attachment(
+            &connection,
+            &attachment("current", "conversation-current", "project-1", 10),
+        )
+        .unwrap();
+        save_attachment(
+            &connection,
+            &attachment("other", "conversation-other", "project-1", 20),
+        )
+        .unwrap();
+        save_attachment(
+            &connection,
+            &attachment("other-project", "conversation-3", "project-2", 30),
+        )
+        .unwrap();
+
+        let attachments = list_project_attachments_excluding_conversation(
+            &connection,
+            "project-1",
+            "conversation-current",
+        )
+        .unwrap();
+
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0].id, "other");
+        assert_eq!(attachments[0].conversation_id, "conversation-other");
+    }
+
+    fn attachment(
+        id: &str,
+        conversation_id: &str,
+        project_id: &str,
+        created_at: i64,
+    ) -> AttachmentRecord {
+        AttachmentRecord {
+            id: id.to_string(),
+            conversation_id: conversation_id.to_string(),
+            message_id: format!("message-{id}"),
+            project_id: Some(project_id.to_string()),
+            kind: "file".to_string(),
+            original_name: format!("{id}.txt"),
+            mime_type: Some("text/plain".to_string()),
+            size_bytes: 10,
+            storage_rel_path: format!("{id}.txt"),
+            created_at,
+        }
+    }
 }

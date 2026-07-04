@@ -4,6 +4,7 @@ mod prompts;
 pub mod protocol;
 mod runtime;
 mod tools;
+mod usage;
 
 pub use cancellation::AgentCancellationToken;
 pub use protocol::{
@@ -14,7 +15,9 @@ pub use protocol::{
     AgentInputAttachmentKind, AgentPromptDetailLevel, AgentPromptPreferences, AgentPromptTone,
     AgentPromptWorkMode, AgentProposedAction, AgentResult, AgentRunContext, AgentRunMode,
     AgentRunStatus, AgentSearchConfig, AgentSearchMode, AgentStateSnapshot, AgentToolCall,
-    AgentToolDefinition, AgentToolResult, AgentToolSafety, AgentUsage, AgentWorkspaceContext,
+    AgentToolDefinition, AgentToolResult, AgentToolSafety, AgentUsage, AgentUsageClearInput,
+    AgentUsageClearOutput, AgentUsageModelSummary, AgentUsageSummaryInput, AgentUsageSummaryOutput,
+    AgentUsageSummaryRange, AgentWorkspaceContext,
 };
 pub use runtime::{
     next_run_id, send_chat, send_chat_with_events, send_chat_with_events_and_cancellation,

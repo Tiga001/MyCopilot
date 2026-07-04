@@ -227,6 +227,16 @@ export async function createComposerAttachmentsFromFiles(files: FileList | File[
   return attachments;
 }
 
+export async function createComposerAttachmentsFromPaths(paths: string[]): Promise<ComposerAttachment[]> {
+  if (paths.length === 0) return [];
+
+  const attachments = await invoke<AgentInputAttachment[]>("load_agent_input_attachments_from_paths", {
+    paths,
+  });
+
+  return attachments.map(composerAttachmentFromAgentAttachment);
+}
+
 export function composerAttachmentFromAgentAttachment(attachment: AgentInputAttachment): ComposerAttachment {
   return {
     id: attachment.id,

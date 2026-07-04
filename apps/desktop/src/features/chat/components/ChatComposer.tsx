@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { LucideIcon } from "lucide-react";
 import {
   ArrowUp,
@@ -22,6 +23,7 @@ import {
   buildAgentInputAttachments,
   composerAttachmentFromAgentAttachment,
   createComposerAttachmentsFromFiles,
+  createComposerAttachmentsFromPaths,
   createAttachmentSummary,
   selectComposerAttachments,
 } from "../chatAttachments";
@@ -70,6 +72,8 @@ export function ChatComposer({
   const { t } = useFrontendConfig();
   const { enabledModels } = useModelSettings();
   const { projects, selectProjectDirectory } = useProjectSettings();
+  const draftRef = useRef(draft);
+  const composerRef = useRef<HTMLFormElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const attachmentPickerRef = useRef<HTMLDivElement>(null);
   const permissionPickerRef = useRef<HTMLDivElement>(null);
@@ -79,6 +83,7 @@ export function ChatComposer({
   const [isPermissionMenuOpen, setIsPermissionMenuOpen] = useState(false);
   const [isModelMenuOpen, setIsModelMenuOpen] = useState(false);
   const [isProjectMenuOpen, setIsProjectMenuOpen] = useState(false);
+  const [isFileDragActive, setIsFileDragActive] = useState(false);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [projectSearch, setProjectSearch] = useState("");
   const message = draft.message;
@@ -109,11 +114,31 @@ export function ChatComposer({
   useDismissOnOutsidePointer(modelPickerRef, isModelMenuOpen, () => setIsModelMenuOpen(false));
   useDismissOnOutsidePointer(projectPickerRef, isProjectMenuOpen, () => setIsProjectMenuOpen(false));
 
+  useEffect(() => {
+    draftRef.current = draft;
+  }, [draft]);
+
   const updateDraft = (patch: Partial<ChatComposerDraft>) => {
-    onDraftChange({
-      ...draft,
+    const currentDraft = draftRef.current;
+    const nextDraft = {
+      ...currentDraft,
       ...patch,
       updatedAt: Date.now(),
+    };
+    draftRef.current = nextDraft;
+    onDraftChange({
+      ...nextDraft,
+    });
+  };
+
+  const appendAttachments = (nextAttachments: ComposerAttachment[]) => {
+    if (nextAttachments.length === 0) return;
+
+    updateDraft({
+      attachments: [
+        ...draftRef.current.attachments,
+        ...buildAgentInputAttachments(nextAttachments),
+      ],
     });
   };
 
@@ -182,7 +207,7 @@ export function ChatComposer({
 
   const removeAttachment = (attachmentId: string) => {
     updateDraft({
-      attachments: draft.attachments.filter((attachment) => attachment.id !== attachmentId),
+      attachments: draftRef.current.attachments.filter((attachment) => attachment.id !== attachmentId),
     });
   };
 
@@ -202,12 +227,7 @@ export function ChatComposer({
       return;
     }
 
-    updateDraft({
-      attachments: [
-        ...draft.attachments,
-        ...buildAgentInputAttachments(nextAttachments),
-      ],
-    });
+    appendAttachments(nextAttachments);
     setAttachmentError(null);
     setIsAttachmentMenuOpen(false);
   };
@@ -217,17 +237,77 @@ export function ChatComposer({
 
     try {
       const nextAttachments = await createComposerAttachmentsFromFiles(files);
-      updateDraft({
-        attachments: [
-          ...draft.attachments,
-          ...buildAgentInputAttachments(nextAttachments),
-        ],
-      });
+      appendAttachments(nextAttachments);
       setAttachmentError(null);
     } catch (error) {
       setAttachmentError(error instanceof Error ? error.message : String(error));
     }
   };
+
+  const addDroppedPaths = async (paths: string[]) => {
+    if (paths.length === 0) return;
+
+    try {
+      const nextAttachments = await createComposerAttachmentsFromPaths(paths);
+      appendAttachments(nextAttachments);
+      setAttachmentError(null);
+    } catch (error) {
+      setAttachmentError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const isNativeDropPositionInsideComposer = (position: { x: number; y: number }) => {
+    const composer = composerRef.current;
+    if (!composer) return false;
+
+    const rect = composer.getBoundingClientRect();
+    const scale = window.devicePixelRatio || 1;
+    const candidates = [
+      { x: position.x, y: position.y },
+      { x: position.x / scale, y: position.y / scale },
+    ];
+
+    return candidates.some(({ x, y }) => x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom);
+  };
+
+  useEffect(() => {
+    let isDisposed = false;
+    let unlistenDragDrop: (() => void) | null = null;
+
+    void getCurrentWindow().onDragDropEvent((event) => {
+      if (isDisposed) return;
+
+      const dragEvent = event.payload;
+      if (dragEvent.type === "leave") {
+        setIsFileDragActive(false);
+        return;
+      }
+
+      if (dragEvent.type === "enter" || dragEvent.type === "over") {
+        setIsFileDragActive(isNativeDropPositionInsideComposer(dragEvent.position));
+        return;
+      }
+
+      if (dragEvent.type === "drop") {
+        const isInsideComposer = isNativeDropPositionInsideComposer(dragEvent.position);
+        setIsFileDragActive(false);
+        if (!isInsideComposer) return;
+        void addDroppedPaths(dragEvent.paths);
+      }
+    }).then((unlisten) => {
+      if (isDisposed) {
+        unlisten();
+        return;
+      }
+
+      unlistenDragDrop = unlisten;
+    });
+
+    return () => {
+      isDisposed = true;
+      unlistenDragDrop?.();
+    };
+  }, []);
 
   const handleSelectProjectDirectory = async () => {
     const project = await selectProjectDirectory();
@@ -240,7 +320,9 @@ export function ChatComposer({
 
   return (
     <form
+      ref={composerRef}
       className="chat-composer"
+      data-drag-active={isFileDragActive || undefined}
       data-submit-state={submitButtonState}
       aria-label={t("chat.composer")}
       onSubmit={(event) => {
@@ -250,11 +332,18 @@ export function ChatComposer({
       onDragOver={(event) => {
         if (event.dataTransfer.types.includes("Files")) {
           event.preventDefault();
+          setIsFileDragActive(true);
         }
+      }}
+      onDragLeave={(event) => {
+        const nextTarget = event.relatedTarget;
+        if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return;
+        setIsFileDragActive(false);
       }}
       onDrop={(event) => {
         if (event.dataTransfer.files.length === 0) return;
         event.preventDefault();
+        setIsFileDragActive(false);
         void addDroppedOrPastedFiles(event.dataTransfer.files);
       }}
       onPaste={(event) => {

@@ -46,6 +46,12 @@ export type {
   AgentToolResult,
   AgentToolSafety,
   AgentUsage,
+  AgentUsageClearInput,
+  AgentUsageClearOutput,
+  AgentUsageModelSummary,
+  AgentUsageSummaryInput,
+  AgentUsageSummaryOutput,
+  AgentUsageSummaryRange,
   AgentWorkspaceContext,
 } from "./protocol";
 export {
@@ -53,6 +59,8 @@ export {
   approveAgentActionWithInvoker,
   cancelAgentActionWithInvoker,
   cancelAgentRunWithInvoker,
+  clearAgentUsageRecordsWithInvoker,
+  getAgentUsageSummaryWithInvoker,
   listPendingAgentActionsWithInvoker,
   rejectAgentActionWithInvoker,
   startAgentConversationTurnWithInvoker,

@@ -144,6 +144,52 @@ export interface AgentUsage {
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
+  cachedInputTokens?: number;
+  cacheCreationInputTokens?: number;
+  billableRequestCount?: number;
+}
+
+export type AgentUsageSummaryRange = "last7Days" | "last30Days" | "all" | "custom";
+
+export interface AgentUsageSummaryInput {
+  range: AgentUsageSummaryRange;
+  from?: number;
+  to?: number;
+}
+
+export interface AgentUsageModelSummary {
+  modelId: string;
+  modelName: string;
+  providerPath?: string;
+  requestCount: number;
+  messageCount: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  cachedInputTokens?: number;
+  cacheCreationInputTokens?: number;
+  estimatedCost?: number;
+}
+
+export interface AgentUsageSummaryOutput {
+  requestCount: number;
+  messageCount: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  cachedInputTokens?: number;
+  cacheCreationInputTokens?: number;
+  estimatedCost?: number;
+  models: AgentUsageModelSummary[];
+}
+
+export interface AgentUsageClearInput {
+  from?: number;
+  to?: number;
+}
+
+export interface AgentUsageClearOutput {
+  deletedRecords: number;
 }
 
 export interface AgentChatOutput {

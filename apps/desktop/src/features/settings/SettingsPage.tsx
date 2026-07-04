@@ -105,7 +105,7 @@ function SettingsContent({
   }
 
   if (activePage === "usageBilling") {
-    return <UsageBillingSettingsPage />;
+    return <UsageBillingSettingsPage uiPreferences={uiPreferences} onUiPreferencesChange={onUiPreferencesChange} />;
   }
 
   if (activePage === "environment") {

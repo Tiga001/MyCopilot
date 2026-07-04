@@ -6,13 +6,14 @@ use crate::llm::{
 use crate::prompts::build_system_prompt;
 use crate::protocol::{
     AgentApprovalDecision, AgentApprovalDecisionStatus, AgentApprovalStatus, AgentChatInput,
-    AgentChatMessage, AgentChatOutput, AgentCommandRiskLevel, AgentError, AgentEvent,
-    AgentInputAttachment, AgentInputAttachmentEncoding, AgentInputAttachmentKind,
-    AgentPromptPreferences, AgentProposedAction, AgentResult, AgentRunContext, AgentRunMode,
-    AgentRunStatus, AgentStateSnapshot, AgentToolCall, AgentToolDefinition, AgentToolResult,
-    AgentUsage, AgentWorkspaceContext,
+    AgentChatMessage, AgentChatOutput, AgentError, AgentEvent, AgentInputAttachment,
+    AgentInputAttachmentEncoding, AgentInputAttachmentKind, AgentPromptPreferences,
+    AgentProposedAction, AgentResult, AgentRunContext, AgentRunMode, AgentRunStatus,
+    AgentStateSnapshot, AgentToolCall, AgentToolDefinition, AgentToolResult, AgentUsage,
+    AgentWorkspaceContext,
 };
 use crate::tools::{ToolExecutionContext, ToolRegistry};
+use crate::usage::merge_total_usage;
 use base64::Engine;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -199,7 +200,7 @@ impl AgentRuntime {
                 ));
             }
 
-            merge_usage(&mut usage, llm_response.usage);
+            merge_total_usage(&mut usage, llm_response.usage);
             finish_reason = llm_response.finish_reason;
 
             let tool_requests = tool_calls_from_response(
@@ -292,11 +293,6 @@ impl AgentRuntime {
                         run_id: run_id.clone(),
                         action: action.clone(),
                     });
-                    let content = build_approval_required_message(&action);
-                    event_stream.emit(AgentEvent::MessageDelta {
-                        run_id: run_id.clone(),
-                        delta: content.clone(),
-                    });
                     event_stream.emit(state_event(
                         &run_id,
                         AgentRunStatus::WaitingForApproval,
@@ -307,14 +303,14 @@ impl AgentRuntime {
                         &run_id,
                         true,
                         AgentRunStatus::WaitingForApproval,
-                        Some(content.clone()),
+                        None,
                         usage.clone(),
                         finish_reason.clone(),
                         vec![action.clone()],
                     ));
 
                     return Ok(AgentChatOutput {
-                        content,
+                        content: String::new(),
                         status: AgentRunStatus::WaitingForApproval,
                         run_id,
                         events: event_stream.into_events(),
@@ -1141,82 +1137,12 @@ fn build_approval_decision_observation(decision: &AgentApprovalDecision) -> Stri
     )
 }
 
-fn build_approval_required_message(action: &AgentProposedAction) -> String {
-    match action {
-        AgentProposedAction::Command { command } => {
-            let mut lines = vec![
-                "需要审批后才能运行命令。".to_string(),
-                format!("命令：`{}`", command.command),
-            ];
-            if let Some(cwd) = &command.cwd {
-                lines.push(format!("工作目录：`{cwd}`"));
-            }
-            if let Some(timeout_ms) = command.timeout_ms {
-                lines.push(format!("超时：{timeout_ms} ms"));
-            }
-            if let Some(risk_level) = command.risk_level {
-                lines.push(format!("风险级别：{}", command_risk_label(risk_level)));
-            }
-            if let Some(reason) = &command.reason {
-                lines.push(format!("原因：{reason}"));
-            }
-            lines.push("你可以批准执行，也可以拒绝并说明原因或要求换一种做法。".to_string());
-            lines.join("\n")
-        }
-        AgentProposedAction::ToolCall { call } => format!(
-            "工具 `{}` 需要审批后才能执行。你可以批准，也可以拒绝并说明原因或要求换一种做法。",
-            call.tool
-        ),
-        AgentProposedAction::Diff { diff } => format!(
-            "文件 `{}` 的修改需要审批后才能应用。\n{}\n你可以批准，也可以拒绝并说明原因或要求换一种做法。",
-            diff.file_path,
-            diff.summary
-                .as_deref()
-                .map(|summary| format!("摘要：{summary}"))
-                .unwrap_or_else(|| "摘要：未提供".to_string())
-        ),
-    }
-}
-
-fn command_risk_label(risk_level: AgentCommandRiskLevel) -> &'static str {
-    match risk_level {
-        AgentCommandRiskLevel::ReadOnly => "read_only",
-        AgentCommandRiskLevel::WritesWorkspace => "writes_workspace",
-        AgentCommandRiskLevel::Network => "network",
-        AgentCommandRiskLevel::Destructive => "destructive",
-        AgentCommandRiskLevel::Unknown => "unknown",
-    }
-}
-
 fn extract_reason_from_args(args: &Value) -> Option<String> {
     args.get("reason")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|reason| !reason.is_empty())
         .map(ToString::to_string)
-}
-
-fn merge_usage(total: &mut Option<AgentUsage>, next: Option<AgentUsage>) {
-    let Some(next) = next else {
-        return;
-    };
-
-    match total {
-        Some(total) => {
-            total.input_tokens = sum_optional(total.input_tokens, next.input_tokens);
-            total.output_tokens = sum_optional(total.output_tokens, next.output_tokens);
-            total.total_tokens = sum_optional(total.total_tokens, next.total_tokens);
-        }
-        None => *total = Some(next),
-    }
-}
-
-fn sum_optional(left: Option<u64>, right: Option<u64>) -> Option<u64> {
-    match (left, right) {
-        (Some(left), Some(right)) => Some(left + right),
-        (Some(value), None) | (None, Some(value)) => Some(value),
-        (None, None) => None,
-    }
 }
 
 fn sanitize_max_tokens(max_tokens: Option<u32>) -> u32 {

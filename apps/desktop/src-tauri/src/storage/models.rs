@@ -137,6 +137,7 @@ pub struct UiPreferencesRecord {
     pub sidebar_project_order: Vec<String>,
     pub sidebar_section_order: String,
     pub native_font_smoothing: bool,
+    pub show_token_usage_details: bool,
     pub translucent_sidebar: bool,
     pub updated_at: i64,
 }

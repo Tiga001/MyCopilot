@@ -858,14 +858,30 @@
 }
 
 .left-sidebar__conversation-age {
+  display: inline-flex;
+  align-items: center;
   min-width: max-content;
   padding-right: 10px;
+  gap: 8px;
   color: var(--mc-color-text-muted);
   font-size: var(--mc-font-size-sidebar-body);
   font-weight: var(--mc-font-weight-medium);
   line-height: var(--mc-line-height-sidebar);
   white-space: nowrap;
   transition: opacity 120ms ease;
+}
+
+.left-sidebar__conversation-approval-badge {
+  display: inline-flex;
+  height: 24px;
+  align-items: center;
+  padding: 0 12px;
+  color: #37c86a;
+  background: color-mix(in srgb, #37c86a 18%, transparent);
+  border-radius: var(--mc-radius-pill);
+  font-size: var(--mc-font-size-sidebar-action);
+  font-weight: var(--mc-font-weight-heavy);
+  line-height: 1;
 }
 
 .left-sidebar__conversation-spinner {

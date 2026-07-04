@@ -82,6 +82,45 @@ import type {
 const STREAM_MESSAGE_SAVE_THROTTLE_MS = 900;
 const DEFAULT_AGENT_MAX_TOKENS = 30000;
 const SUPPORTS_NATIVE_FONT_SMOOTHING = isMacOS();
+const AUTO_APPROVAL_MAX_STEPS = 16;
+
+type AgentApprovalOptions = {
+  rememberForRun?: boolean;
+};
+
+type AgentApprovalAutoRule = {
+  kind: "commandPrefix";
+  prefix: string;
+};
+
+function getCommandApprovalPrefix(action: AgentProposedAction) {
+  if (action.type !== "command") return "";
+  return action.command.command.trim();
+}
+
+function shouldAutoApproveAgentAction(
+  action: AgentProposedAction,
+  rules: AgentApprovalAutoRule[],
+) {
+  const command = getCommandApprovalPrefix(action);
+  if (!command) return false;
+
+  return rules.some(
+    (rule) => rule.kind === "commandPrefix" && command.startsWith(rule.prefix),
+  );
+}
+
+function getNextAutoApprovedAction(
+  output: AgentChatOutput,
+  rules: AgentApprovalAutoRule[] | undefined,
+) {
+  if (output.status !== "waiting_for_approval" || !rules?.length) return null;
+  return (
+    output.proposedActions.find((action) =>
+      shouldAutoApproveAgentAction(action, rules),
+    ) ?? null
+  );
+}
 
 function SidebarToggleIcon({ open, side }: { open: boolean; side: Side }) {
   return (
@@ -206,6 +245,7 @@ export function App() {
   const shellRef = useRef<HTMLDivElement>(null);
   const cancelledPendingMessageIdsRef = useRef<Set<string>>(new Set());
   const cancelledRunIdsRef = useRef<Set<string>>(new Set());
+  const approvalAutoRulesRef = useRef<Map<string, AgentApprovalAutoRule[]>>(new Map());
   const activeRunBindingsRef = useRef<Map<string, ActiveRunBinding>>(new Map());
   const bufferedAgentEventsRef = useRef<Map<string, AgentEvent[]>>(new Map());
   const previousPersistedConversationsRef = useRef<ChatConversation[]>([]);
@@ -826,6 +866,7 @@ export function App() {
       );
 
       if (output.status !== "waiting_for_approval") {
+        approvalAutoRulesRef.current.delete(messageId);
         cleanupRunBinding(output.runId);
       }
     },
@@ -871,6 +912,7 @@ export function App() {
       );
 
       if (execution.agentOutput.status !== "waiting_for_approval") {
+        approvalAutoRulesRef.current.delete(messageId);
         cleanupRunBinding(execution.agentOutput.runId);
       }
     },
@@ -890,6 +932,10 @@ export function App() {
       );
 
       if (agentEvent.type === "done") {
+        if (agentEvent.status !== "waiting_for_approval") {
+          approvalAutoRulesRef.current.delete(pendingMessageId);
+        }
+
         if (agentEvent.success && agentEvent.status !== "waiting_for_approval") {
           const completedAt = Date.now();
           setConversations((currentConversations) =>
@@ -1084,6 +1130,7 @@ export function App() {
 
   const createConversationFromMessage = useCallback(
     (content: string, options: ChatSubmitOptions) => {
+      approvalAutoRulesRef.current.clear();
       const now = Date.now();
       const title = createConversationTitle(content);
       const userMessage = createUserMessage(content, options.attachments);
@@ -1140,6 +1187,7 @@ export function App() {
 
   const appendMessageToActiveConversation = useCallback(
     (content: string, options: ChatSubmitOptions) => {
+      approvalAutoRulesRef.current.clear();
       if (!activeConversationId) {
         createConversationFromMessage(content, options);
         return;
@@ -1453,6 +1501,7 @@ export function App() {
 
     if (!pendingMessage) return;
 
+    approvalAutoRulesRef.current.delete(pendingMessage.id);
     cancelledPendingMessageIdsRef.current.add(pendingMessage.id);
 
     if (pendingMessage.agentRun?.runId) {
@@ -1502,15 +1551,55 @@ export function App() {
   }, [activeConversationId, cancelBackendAgentRun, cleanupRunBinding, conversations]);
 
   const handleApproveAgentAction = useCallback(
-    async (messageId: string, action: AgentProposedAction) => {
+    async (
+      messageId: string,
+      action: AgentProposedAction,
+      options: AgentApprovalOptions = {},
+    ) => {
       if (!activeConversationId) return;
+      const conversationId = activeConversationId;
+      const rememberedPrefix = options.rememberForRun ? getCommandApprovalPrefix(action) : "";
+
+      if (rememberedPrefix) {
+        const currentRules = approvalAutoRulesRef.current.get(messageId) ?? [];
+        if (
+          !currentRules.some(
+            (rule) => rule.kind === "commandPrefix" && rule.prefix === rememberedPrefix,
+          )
+        ) {
+          approvalAutoRulesRef.current.set(messageId, [
+            ...currentRules,
+            {
+              kind: "commandPrefix",
+              prefix: rememberedPrefix,
+            },
+          ]);
+        }
+      }
 
       try {
-        const execution = await approveAgentAction(getAgentActionId(action));
-        applyAgentExecutionToMessage(activeConversationId, messageId, execution);
+        let actionToApprove: AgentProposedAction | null = action;
+        let approvalSteps = 0;
+
+        while (actionToApprove && approvalSteps < AUTO_APPROVAL_MAX_STEPS) {
+          approvalSteps += 1;
+
+          const execution = await approveAgentAction(getAgentActionId(actionToApprove));
+          applyAgentExecutionToMessage(conversationId, messageId, execution);
+
+          actionToApprove = getNextAutoApprovedAction(
+            execution.agentOutput,
+            approvalAutoRulesRef.current.get(messageId),
+          );
+        }
+
+        if (approvalSteps >= AUTO_APPROVAL_MAX_STEPS) {
+          console.warn("Stopped automatic approvals after reaching the local safety limit.");
+        }
       } catch (error) {
+        approvalAutoRulesRef.current.delete(messageId);
         updateAssistantMessage(
-          activeConversationId,
+          conversationId,
           messageId,
           (message) => {
             const currentRun = ensureAgentRun(message.agentRun, null, "failed");
@@ -1537,15 +1626,17 @@ export function App() {
   );
 
   const handleRejectAgentAction = useCallback(
-    async (messageId: string, action: AgentProposedAction) => {
+    async (messageId: string, action: AgentProposedAction, message?: string) => {
       if (!activeConversationId) return;
+      const conversationId = activeConversationId;
+      approvalAutoRulesRef.current.delete(messageId);
 
       try {
-        const execution = await rejectAgentAction(getAgentActionId(action));
-        applyAgentExecutionToMessage(activeConversationId, messageId, execution);
+        const execution = await rejectAgentAction(getAgentActionId(action), message);
+        applyAgentExecutionToMessage(conversationId, messageId, execution);
       } catch (error) {
         updateAssistantMessage(
-          activeConversationId,
+          conversationId,
           messageId,
           (message) => {
             const currentRun = ensureAgentRun(message.agentRun, null, "failed");
@@ -1574,11 +1665,13 @@ export function App() {
   const handleCancelAgentAction = useCallback(
     async (messageId: string, action: AgentProposedAction) => {
       if (!activeConversationId) return;
+      const conversationId = activeConversationId;
+      approvalAutoRulesRef.current.delete(messageId);
 
       try {
         await cancelAgentAction(getAgentActionId(action));
         updateAssistantMessage(
-          activeConversationId,
+          conversationId,
           messageId,
           (message) => {
             const currentRun = ensureAgentRun(message.agentRun, null, "cancelled");
@@ -1601,7 +1694,7 @@ export function App() {
         );
       } catch (error) {
         updateAssistantMessage(
-          activeConversationId,
+          conversationId,
           messageId,
           (message) => {
             const currentRun = ensureAgentRun(message.agentRun, null, "failed");
@@ -1739,6 +1832,7 @@ export function App() {
               onMessageUiStateChange={updateMessageUiState}
               onStopGenerating={stopActiveGeneration}
               onSubmitMessage={appendMessageToActiveConversation}
+              showTokenUsageDetails={uiPreferences.showTokenUsageDetails}
             />
           )}
         </div>

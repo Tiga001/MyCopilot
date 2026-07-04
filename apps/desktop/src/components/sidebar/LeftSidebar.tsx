@@ -212,9 +212,11 @@ function ConversationRow({
   onSelectConversation,
   onTogglePinConversation,
   pinLabel,
+  processingLabel,
   renameLabel,
   unreadLabel,
   unpinLabel,
+  waitingApprovalLabel,
   nested = false,
 }: {
   activeConversationId: string | null;
@@ -230,9 +232,11 @@ function ConversationRow({
   onSelectConversation: (conversationId: string) => void;
   onTogglePinConversation: (conversationId: string) => void;
   pinLabel: string;
+  processingLabel: string;
   renameLabel: string;
   unreadLabel: string;
   unpinLabel: string;
+  waitingApprovalLabel: string;
   nested?: boolean;
 }) {
   const conversationMenuRef = useRef<HTMLDivElement>(null);
@@ -241,6 +245,10 @@ function ConversationRow({
   const isPending = conversation.messages.some(
     (message) => message.role === "assistant" && message.status === "pending",
   );
+  const isWaitingForApproval = conversation.messages.some(
+    (message) => message.role === "assistant" && message.agentRun?.status === "waiting_for_approval",
+  );
+  const showWaitingApprovalBadge = isWaitingForApproval && conversation.id !== activeConversationId;
   const isUnread = Boolean(conversation.unreadAt && conversation.id !== activeConversationId && !isPending);
   const canMarkUnread = conversation.id !== activeConversationId && !isPending && !conversation.unreadAt;
   const isConversationMenuOpen = Boolean(menuPosition);
@@ -252,6 +260,7 @@ function ConversationRow({
     <div
       className={`left-sidebar__conversation-row${nested ? " left-sidebar__conversation-row--nested" : ""}`}
       data-active={conversation.id === activeConversationId || undefined}
+      data-awaiting-approval={showWaitingApprovalBadge || undefined}
       data-menu-open={isConversationMenuOpen || undefined}
       data-pending={isPending || undefined}
       onContextMenu={(event) => {
@@ -271,8 +280,13 @@ function ConversationRow({
       </button>
 
       <span className="left-sidebar__conversation-age">
-        {isPending ? (
-          <span className="left-sidebar__conversation-spinner" aria-label="正在处理" />
+        {showWaitingApprovalBadge ? (
+          <>
+            <span className="left-sidebar__conversation-approval-badge">{waitingApprovalLabel}</span>
+            <span className="left-sidebar__conversation-spinner" aria-label={processingLabel} />
+          </>
+        ) : isPending ? (
+          <span className="left-sidebar__conversation-spinner" aria-label={processingLabel} />
         ) : isUnread ? (
           <span className="left-sidebar__conversation-unread-dot" aria-label={unreadLabel} />
         ) : (
@@ -793,9 +807,11 @@ export function LeftSidebar({
       onSelectConversation={onSelectConversation}
       onTogglePinConversation={onTogglePinConversation}
       pinLabel={t("conversation.pinConversation")}
+      processingLabel={t("sidebar.processingConversation")}
       renameLabel={t("conversation.renameConversation")}
       unreadLabel={t("sidebar.unreadConversation")}
       unpinLabel={t("conversation.unpinConversation")}
+      waitingApprovalLabel={t("sidebar.waitingApproval")}
       justNow={t("sidebar.justNow")}
     />
   );

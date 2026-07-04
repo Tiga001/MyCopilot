@@ -8,6 +8,7 @@ pub mod migrations;
 pub mod models;
 pub mod preferences_repository;
 pub mod project_repository;
+pub mod usage_repository;
 
 use rusqlite::Connection;
 use std::path::Path;

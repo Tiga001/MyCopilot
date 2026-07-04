@@ -1,13 +1,14 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import {
   AlertTriangle,
   ChevronDown,
   Check,
   Copy,
+  Database,
   PencilLine,
   SquareTerminal,
 } from "lucide-react";
-import type { AgentProposedAction, AgentToolCall } from "@agent";
+import type { AgentProposedAction, AgentToolCall, AgentUsage } from "@agent";
 import { useFrontendConfig } from "../../../config/FrontendConfigProvider";
 import { formatTranslation, type Translate } from "../../../config/translationFormat";
 import type {
@@ -34,8 +35,14 @@ import {
   ReadToolActivityGroup,
   type ReadToolActivityGroupItem,
 } from "./toolActivities/ReadToolActivity";
+import {
+  getSearchKind,
+  isSearchTool,
+  SearchToolActivityGroup,
+  type SearchKind,
+  type SearchToolActivityGroupItem,
+} from "./toolActivities/SearchToolActivity";
 import { AssistantSources } from "./toolActivities/WebSearchSources";
-import { formatToolDetails, getToolDisplayName } from "./toolActivities/toolActivityUtils";
 
 const ACTIVE_STREAMING_GRACE_MS = 1200;
 const COPIED_INDICATOR_MS = 1300;
@@ -43,10 +50,15 @@ const COPIED_INDICATOR_MS = 1300;
 interface ChatMessageItemProps {
   isLastAssistantMessage?: boolean;
   message: ChatMessage;
-  onApprove?: (messageId: string, action: AgentProposedAction) => void;
+  onApprove?: (
+    messageId: string,
+    action: AgentProposedAction,
+    options?: { rememberForRun?: boolean },
+  ) => void;
   onCancel?: (messageId: string, action: AgentProposedAction) => void;
-  onReject?: (messageId: string, action: AgentProposedAction) => void;
+  onReject?: (messageId: string, action: AgentProposedAction, message?: string) => void;
   onUiStateChange?: (messageId: string, uiState: ChatMessage["uiState"]) => void;
+  showTokenUsageDetails: boolean;
 }
 
 type RenderableTimelineItem =
@@ -55,6 +67,12 @@ type RenderableTimelineItem =
       id: string;
       type: "read_group";
       kind: ChatReadActivityKind;
+      callIds: string[];
+    }
+  | {
+      id: string;
+      type: "search_group";
+      kind: SearchKind;
       callIds: string[];
     };
 
@@ -78,6 +96,29 @@ function formatMessageTime(timestamp: number | undefined, language: string, t: T
   }
 
   return `${date.getMonth() + 1}月${date.getDate()}日 ${time}`;
+}
+
+function formatUsageTokenCount(value: unknown, language: string) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return new Intl.NumberFormat(language).format(value);
+}
+
+function getUsageRows(usage: AgentUsage | undefined, language: string, t: Translate) {
+  if (!usage) return [];
+
+  return [
+    { label: t("chat.usageInputTokens"), value: formatUsageTokenCount(usage.inputTokens, language) },
+    { label: t("chat.usageOutputTokens"), value: formatUsageTokenCount(usage.outputTokens, language) },
+    { label: t("chat.usageTotalTokens"), value: formatUsageTokenCount(usage.totalTokens, language) },
+    {
+      label: t("chat.usageCachedInputTokens"),
+      value: formatUsageTokenCount(usage.cachedInputTokens, language),
+    },
+    {
+      label: t("chat.usageCacheCreationInputTokens"),
+      value: formatUsageTokenCount(usage.cacheCreationInputTokens, language),
+    },
+  ].filter((row): row is { label: string; value: string } => row.value !== null);
 }
 
 async function copyTextToClipboard(content: string) {
@@ -148,7 +189,7 @@ function isTimelineItemRenderable(run: ChatAgentRunView, item: ChatAgentTimeline
   if (item.type === "message") return Boolean(item.content.trim());
   if (item.type === "tool_call") return run.toolCalls.some((candidate) => candidate.id === item.callId);
   if (item.type === "diff") return run.diffs.some((candidate) => candidate.id === item.diffId);
-  if (item.type === "approval") return Boolean(getActionById(run, item.actionId));
+  if (item.type === "approval") return false;
   if (item.type === "command_output") {
     return run.commandOutputs.some((candidate) => candidate.id === item.outputId);
   }
@@ -244,7 +285,7 @@ function getReadKindForCall(run: ChatAgentRunView, call: AgentToolCall) {
     ?? getReadActivityKindForTool(call.tool);
 }
 
-function groupReadTimelineItems(
+function groupTimelineItems(
   run: ChatAgentRunView,
   timeline: ChatAgentTimelineItem[],
 ): RenderableTimelineItem[] {
@@ -252,29 +293,57 @@ function groupReadTimelineItems(
     if (item.type !== "tool_call") return [...items, item];
 
     const call = run.toolCalls.find((candidate) => candidate.id === item.callId);
-    const kind = call ? getReadKindForCall(run, call) : undefined;
-    if (!kind) return [...items, item];
+    if (!call) return [...items, item];
 
-    const previousItem = items[items.length - 1];
-    if (previousItem?.type === "read_group" && previousItem.kind === kind) {
+    const readKind = getReadKindForCall(run, call);
+    if (readKind) {
+      const previousItem = items[items.length - 1];
+      if (previousItem?.type === "read_group" && previousItem.kind === readKind) {
+        return [
+          ...items.slice(0, -1),
+          {
+            ...previousItem,
+            callIds: [...previousItem.callIds, item.callId],
+          },
+        ];
+      }
+
       return [
-        ...items.slice(0, -1),
+        ...items,
         {
-          ...previousItem,
-          callIds: [...previousItem.callIds, item.callId],
+          id: `read-group-${item.callId}`,
+          type: "read_group",
+          kind: readKind,
+          callIds: [item.callId],
         },
       ];
     }
 
-    return [
-      ...items,
-      {
-        id: `read-group-${item.callId}`,
-        type: "read_group",
-        kind,
-        callIds: [item.callId],
-      },
-    ];
+    if (isSearchTool(call.tool)) {
+      const searchKind = getSearchKind(call);
+      const previousItem = items[items.length - 1];
+      if (previousItem?.type === "search_group" && previousItem.kind === searchKind) {
+        return [
+          ...items.slice(0, -1),
+          {
+            ...previousItem,
+            callIds: [...previousItem.callIds, item.callId],
+          },
+        ];
+      }
+
+      return [
+        ...items,
+        {
+          id: `search-group-${item.callId}`,
+          type: "search_group",
+          kind: searchKind,
+          callIds: [item.callId],
+        },
+      ];
+    }
+
+    return [...items, item];
   }, []);
 }
 
@@ -292,6 +361,26 @@ function getReadGroupItems(
         activity: run.readActivities?.find((activity) => activity.callId === call.id),
         call,
         result: getToolResult(run, call.id),
+      },
+    ];
+  }, []);
+}
+
+function getSearchGroupItems(
+  run: ChatAgentRunView,
+  callIds: string[],
+): SearchToolActivityGroupItem[] {
+  return callIds.reduce<SearchToolActivityGroupItem[]>((items, callId) => {
+    const call = run.toolCalls.find((candidate) => candidate.id === callId);
+    if (!call) return items;
+    const result = getToolResult(run, call.id);
+
+    return [
+      ...items,
+      {
+        call,
+        cancelled: run.status === "cancelled" && !result,
+        result,
       },
     ];
   }, []);
@@ -369,7 +458,44 @@ function AgentRunElapsedHeader({
   );
 }
 
-function ChatMessageActions({ content, timestamp }: { content: string; timestamp: number | undefined }) {
+function UsageAction({ usage }: { usage: AgentUsage | undefined }) {
+  const { language, t } = useFrontendConfig();
+  const popoverId = useId();
+  const rows = getUsageRows(usage, language, t);
+
+  if (rows.length === 0) return null;
+
+  return (
+    <div className="chat-message__usage">
+      <button aria-describedby={popoverId} aria-label={t("chat.usage")} type="button">
+        <Database aria-hidden="true" />
+      </button>
+      <div className="chat-message__usage-popover" id={popoverId} role="tooltip">
+        <p className="chat-message__usage-title">{t("chat.usageTitle")}</p>
+        <dl className="chat-message__usage-list">
+          {rows.map((row) => (
+            <div className="chat-message__usage-row" key={row.label}>
+              <dt>{row.label}</dt>
+              <dd>{row.value}</dd>
+            </div>
+          ))}
+        </dl>
+      </div>
+    </div>
+  );
+}
+
+function ChatMessageActions({
+  content,
+  showTokenUsageDetails,
+  timestamp,
+  usage,
+}: {
+  content: string;
+  showTokenUsageDetails: boolean;
+  timestamp: number | undefined;
+  usage?: AgentUsage;
+}) {
   const { language, t } = useFrontendConfig();
   const [copied, setCopied] = useState(false);
   const timeLabel = formatMessageTime(timestamp, language, t);
@@ -389,10 +515,10 @@ function ChatMessageActions({ content, timestamp }: { content: string; timestamp
   }, [copied]);
 
   return (
-    <div className="chat-message__actions" aria-label="消息操作">
+    <div className="chat-message__actions" aria-label={t("chat.messageActions")}>
       {timeLabel && <time dateTime={new Date(timestamp ?? 0).toISOString()}>{timeLabel}</time>}
       <button
-        aria-label={copied ? "已复制" : "复制消息"}
+        aria-label={copied ? t("chat.copied") : t("chat.copyMessage")}
         disabled={!canCopy}
         onClick={() => {
           if (!canCopy) return;
@@ -400,14 +526,15 @@ function ChatMessageActions({ content, timestamp }: { content: string; timestamp
             .then(() => setCopied(true))
             .catch(() => setCopied(false));
         }}
-        title={copied ? "已复制" : "复制消息"}
+        title={copied ? t("chat.copied") : t("chat.copyMessage")}
         type="button"
       >
         <Icon aria-hidden="true" />
         <span className="chat-message__action-tooltip" role="tooltip">
-          {copied ? "已复制" : "复制"}
+          {copied ? t("chat.copied") : t("chat.copy")}
         </span>
       </button>
+      {showTokenUsageDetails && <UsageAction usage={usage} />}
     </div>
   );
 }
@@ -435,63 +562,6 @@ function AgentDiffActivity({ run, diffId }: { run: ChatAgentRunView; diffId: str
         <pre>{diff.patch}</pre>
       </div>
     </AgentActivityDisclosure>
-  );
-}
-
-function getApprovalTitle(action: AgentProposedAction, t: Translate) {
-  if (action.type === "diff") {
-    return formatTranslation(t, "agent.approval.diff", { filePath: action.diff.filePath });
-  }
-  if (action.type === "command") {
-    return formatTranslation(t, "agent.approval.command", { command: action.command.command });
-  }
-  return formatTranslation(t, "agent.approval.tool", {
-    tool: getToolDisplayName(action.call.tool, t),
-  });
-}
-
-function getApprovalDetails(action: AgentProposedAction) {
-  if (action.type === "diff") return action.diff.summary ?? action.diff.patch;
-  if (action.type === "command") return action.command.reason ?? action.command.cwd ?? "";
-  return action.call.reason ?? formatToolDetails(action.call.args);
-}
-
-function AgentApprovalActivity({
-  action,
-  messageId,
-  onApprove,
-  onCancel,
-  onReject,
-}: {
-  action: AgentProposedAction;
-  messageId: string;
-  onApprove?: (messageId: string, action: AgentProposedAction) => void;
-  onCancel?: (messageId: string, action: AgentProposedAction) => void;
-  onReject?: (messageId: string, action: AgentProposedAction) => void;
-}) {
-  const { t } = useFrontendConfig();
-
-  return (
-    <div className="agent-approval-card">
-      <div className="agent-approval-card__body">
-        <AlertTriangle aria-hidden="true" />
-        <div>
-          <strong>{getApprovalTitle(action, t)}</strong>
-          {getApprovalDetails(action) && <p>{getApprovalDetails(action)}</p>}
-        </div>
-      </div>
-      <div className="agent-approval-card__actions">
-        <button type="button" onClick={() => onReject?.(messageId, action)}>
-          {t("agent.approval.reject")}
-        </button>
-        <button type="button" onClick={() => onCancel?.(messageId, action)}>
-          {t("agent.approval.cancel")}
-        </button>
-        <button type="button" data-variant="primary" onClick={() => onApprove?.(messageId, action)}>
-          {t("agent.approval.approve")}
-        </button>
-      </div>
-    </div>
   );
 }
 
@@ -530,22 +600,22 @@ function AgentThinkingActivity() {
 function AgentTimelineItemView({
   item,
   message,
-  onApprove,
-  onCancel,
-  onReject,
   run,
 }: {
   item: RenderableTimelineItem;
   message: ChatMessage;
-  onApprove?: (messageId: string, action: AgentProposedAction) => void;
-  onCancel?: (messageId: string, action: AgentProposedAction) => void;
-  onReject?: (messageId: string, action: AgentProposedAction) => void;
   run: ChatAgentRunView;
 }) {
   if (item.type === "read_group") {
     const items = getReadGroupItems(run, item.callIds);
     if (items.length === 0) return null;
     return <ReadToolActivityGroup items={items} />;
+  }
+
+  if (item.type === "search_group") {
+    const items = getSearchGroupItems(run, item.callIds);
+    if (items.length === 0) return null;
+    return <SearchToolActivityGroup items={items} kind={item.kind} />;
   }
 
   if (item.type === "message") {
@@ -575,18 +645,7 @@ function AgentTimelineItemView({
   }
 
   if (item.type === "approval") {
-    const action = getActionById(run, item.actionId);
-    if (!action) return null;
-
-    return (
-      <AgentApprovalActivity
-        action={action}
-        messageId={message.id}
-        onApprove={onApprove}
-        onCancel={onCancel}
-        onReject={onReject}
-      />
-    );
+    return null;
   }
 
   if (item.type === "command_output") {
@@ -603,15 +662,9 @@ function AgentTimelineItemView({
 
 function AgentRunView({
   message,
-  onApprove,
-  onCancel,
-  onReject,
   onUiStateChange,
 }: {
   message: ChatMessage;
-  onApprove?: (messageId: string, action: AgentProposedAction) => void;
-  onCancel?: (messageId: string, action: AgentProposedAction) => void;
-  onReject?: (messageId: string, action: AgentProposedAction) => void;
   onUiStateChange?: (messageId: string, uiState: ChatMessage["uiState"]) => void;
 }) {
   const { t } = useFrontendConfig();
@@ -687,7 +740,7 @@ function AgentRunView({
   const showTokenLimitNotice = isRunSettled(run) && isTokenLimitFinishReason(run.finishReason);
   const webSearchSources = getUniqueWebSearchSources(run);
   const displayTimeline = useMemo(
-    () => groupReadTimelineItems(run, timeline),
+    () => groupTimelineItems(run, timeline),
     [run, timeline],
   );
 
@@ -711,9 +764,6 @@ function AgentRunView({
             item={item}
             key={item.id}
             message={message}
-            onApprove={onApprove}
-            onCancel={onCancel}
-            onReject={onReject}
             run={run}
           />
         ))}
@@ -737,18 +787,12 @@ function AgentRunView({
 
 function MessageContent({
   message,
-  onApprove,
-  onCancel,
-  onReject,
   onUiStateChange,
 }: ChatMessageItemProps) {
   if (message.role === "assistant") {
     return (
       <AgentRunView
         message={message}
-        onApprove={onApprove}
-        onCancel={onCancel}
-        onReject={onReject}
         onUiStateChange={onUiStateChange}
       />
     );
@@ -757,7 +801,13 @@ function MessageContent({
   return <ChatMarkdown content={getUserVisibleContent(message)} />;
 }
 
-function MessageAttachments({ attachments }: { attachments?: ChatMessage["attachments"] }) {
+function MessageAttachments({
+  attachments,
+  messageId,
+}: {
+  attachments?: ChatMessage["attachments"];
+  messageId: string;
+}) {
   if (!attachments?.length) return null;
 
   const imageAttachments = attachments.filter((attachment) => attachment.kind === "image");
@@ -772,6 +822,8 @@ function MessageAttachments({ attachments }: { attachments?: ChatMessage["attach
     return (
       <div
         className="chat-message-attachment"
+        data-chat-attachment-id={attachment.id}
+        data-chat-attachment-message-id={messageId}
         data-kind={isImagePreview ? "image" : "file"}
         key={attachment.id}
         title={attachment.name}
@@ -817,12 +869,14 @@ export function ChatMessageItem({
   onCancel,
   onReject,
   onUiStateChange,
+  showTokenUsageDetails,
 }: ChatMessageItemProps) {
   const isAssistantActionsVisible = shouldShowAssistantActions(message);
   const userVisibleContent = getUserVisibleContent(message);
   const actionContent = message.role === "assistant" ? getAssistantFinalContent(message) : userVisibleContent;
   const actionTimestamp =
     message.role === "assistant" ? message.agentRun?.completedAt ?? message.createdAt : message.createdAt;
+  const actionUsage = message.role === "assistant" ? message.agentRun?.usage : undefined;
   const showActions = message.role === "user" || isAssistantActionsVisible;
   const pinCopyAction = message.role === "assistant" && isLastAssistantMessage && isAssistantActionsVisible;
   const showBody = message.role === "assistant" || Boolean(userVisibleContent.trim());
@@ -831,10 +885,11 @@ export function ChatMessageItem({
     <article
       className={`chat-message chat-message--${message.role}`}
       data-copy-pinned={pinCopyAction ? "true" : undefined}
+      data-message-id={message.id}
       data-status={message.status}
       key={message.id}
     >
-      {message.role === "user" && <MessageAttachments attachments={message.attachments} />}
+      {message.role === "user" && <MessageAttachments attachments={message.attachments} messageId={message.id} />}
       {showBody && (
         <div className="chat-message__body">
           <MessageContent
@@ -843,10 +898,18 @@ export function ChatMessageItem({
             onCancel={onCancel}
             onReject={onReject}
             onUiStateChange={onUiStateChange}
+            showTokenUsageDetails={showTokenUsageDetails}
           />
         </div>
       )}
-      {showActions && <ChatMessageActions content={actionContent} timestamp={actionTimestamp} />}
+      {showActions && (
+        <ChatMessageActions
+          content={actionContent}
+          showTokenUsageDetails={showTokenUsageDetails}
+          timestamp={actionTimestamp}
+          usage={actionUsage}
+        />
+      )}
     </article>
   );
 }

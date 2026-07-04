@@ -134,7 +134,7 @@ fn attachment_context_section(context: Option<&AgentRunContext>) -> String {
         .and_then(|context| context.attachment_library.as_ref())
         .map(|library| {
             format!(
-                "## 附件上下文\n当前对话附件库使用虚拟路径 @attachments。对话附件数量：{}；当前项目附件数量：{}。需要查看附件时，先用 attachments_list 或 attachments_list_project 获取 readPath；图片用 read_image，文本或文档用 read_file/read_pdf/read_word/read_presentation/read_spreadsheet。不要把 @attachments 当作 workspace 路径，也不要臆造真实本地路径。",
+                "## 附件上下文\n当前对话附件库使用虚拟路径 @attachments。当前聊天附件数量：{}；同项目其他聊天附件数量：{}。需要查看本聊天上传的附件时，用 attachments_list；需要查看同一项目里其他聊天上传的历史附件时，用 attachments_list_project。attachments_list_project 不包含当前聊天附件。获取 readPath 后，图片用 read_image，文本或文档用 read_file/read_pdf/read_word/read_presentation/read_spreadsheet。不要把 @attachments 当作 workspace 路径，也不要臆造真实本地路径。",
                 library.conversation_attachments.len(),
                 library.project_attachments.len()
             )

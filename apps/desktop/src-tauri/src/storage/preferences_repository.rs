@@ -20,6 +20,7 @@ pub fn load_ui_preferences(connection: &Connection) -> rusqlite::Result<UiPrefer
                 sidebar_section_order,
                 translucent_sidebar,
                 native_font_smoothing,
+                show_token_usage_details,
                 profile_display_name,
                 profile_handle,
                 profile_avatar_data_url,
@@ -38,10 +39,11 @@ pub fn load_ui_preferences(connection: &Connection) -> rusqlite::Result<UiPrefer
                     sidebar_section_order: row.get(3)?,
                     translucent_sidebar: row.get::<_, i64>(4)? != 0,
                     native_font_smoothing: row.get::<_, i64>(5)? != 0,
-                    profile_display_name: row.get(6)?,
-                    profile_handle: row.get(7)?,
-                    profile_avatar_data_url: row.get(8)?,
-                    updated_at: row.get(9)?,
+                    show_token_usage_details: row.get::<_, i64>(6)? != 0,
+                    profile_display_name: row.get(7)?,
+                    profile_handle: row.get(8)?,
+                    profile_avatar_data_url: row.get(9)?,
+                    updated_at: row.get(10)?,
                 })
             },
         )
@@ -71,12 +73,13 @@ pub fn save_ui_preferences(
             sidebar_section_order,
             translucent_sidebar,
             native_font_smoothing,
+            show_token_usage_details,
             profile_display_name,
             profile_handle,
             profile_avatar_data_url,
             updated_at
         )
-        VALUES ('default', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+        VALUES ('default', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
         ON CONFLICT(id) DO UPDATE SET
             sidebar_conversation_sort = excluded.sidebar_conversation_sort,
             sidebar_project_sort = excluded.sidebar_project_sort,
@@ -84,6 +87,7 @@ pub fn save_ui_preferences(
             sidebar_section_order = excluded.sidebar_section_order,
             translucent_sidebar = excluded.translucent_sidebar,
             native_font_smoothing = excluded.native_font_smoothing,
+            show_token_usage_details = excluded.show_token_usage_details,
             profile_display_name = excluded.profile_display_name,
             profile_handle = excluded.profile_handle,
             profile_avatar_data_url = excluded.profile_avatar_data_url,
@@ -100,6 +104,11 @@ pub fn save_ui_preferences(
                 0
             },
             if preferences.native_font_smoothing {
+                1
+            } else {
+                0
+            },
+            if preferences.show_token_usage_details {
                 1
             } else {
                 0
@@ -127,6 +136,7 @@ fn default_ui_preferences() -> UiPreferencesRecord {
         sidebar_project_order: Vec::new(),
         sidebar_section_order: DEFAULT_SECTION_ORDER.to_string(),
         native_font_smoothing: false,
+        show_token_usage_details: true,
         translucent_sidebar: false,
         updated_at: 0,
     }
@@ -157,6 +167,7 @@ fn normalize_preferences(preferences: UiPreferencesRecord) -> UiPreferencesRecor
             DEFAULT_SECTION_ORDER,
         ),
         native_font_smoothing: preferences.native_font_smoothing,
+        show_token_usage_details: preferences.show_token_usage_details,
         translucent_sidebar: preferences.translucent_sidebar,
         updated_at: preferences.updated_at,
     }
