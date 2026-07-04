@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { LucideIcon } from "lucide-react";
 import {
@@ -75,6 +75,8 @@ export function ChatComposer({
   const draftRef = useRef(draft);
   const composerRef = useRef<HTMLFormElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const isComposingRef = useRef(false);
+  const lastCompositionEndAtRef = useRef(0);
   const attachmentPickerRef = useRef<HTMLDivElement>(null);
   const permissionPickerRef = useRef<HTMLDivElement>(null);
   const modelPickerRef = useRef<HTMLDivElement>(null);
@@ -108,6 +110,16 @@ export function ChatComposer({
   const hasSendableContent = message.trim().length > 0 || attachments.length > 0;
   const canSend = hasSendableContent && !hasUnsupportedImageAttachment && Boolean(selectedModel);
   const submitButtonState = isGenerating ? "stop" : canSend ? "ready" : "disabled";
+  const isConfirmingImeInput = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    const nativeEvent = event.nativeEvent;
+    const keyCode = "keyCode" in nativeEvent ? nativeEvent.keyCode : 0;
+    return (
+      isComposingRef.current ||
+      nativeEvent.isComposing ||
+      keyCode === 229 ||
+      Date.now() - lastCompositionEndAtRef.current < 120
+    );
+  };
 
   useDismissOnOutsidePointer(attachmentPickerRef, isAttachmentMenuOpen, () => setIsAttachmentMenuOpen(false));
   useDismissOnOutsidePointer(permissionPickerRef, isPermissionMenuOpen, () => setIsPermissionMenuOpen(false));
@@ -405,8 +417,15 @@ export function ChatComposer({
         aria-label={t("chat.inputAria")}
         rows={1}
         onChange={(event) => updateDraft({ message: event.target.value })}
+        onCompositionStart={() => {
+          isComposingRef.current = true;
+        }}
+        onCompositionEnd={() => {
+          isComposingRef.current = false;
+          lastCompositionEndAtRef.current = Date.now();
+        }}
         onKeyDown={(event) => {
-          if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+          if (event.key !== "Enter" || event.shiftKey || isConfirmingImeInput(event)) return;
 
           event.preventDefault();
           if (!isGenerating) {
