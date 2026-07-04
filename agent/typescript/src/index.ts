@@ -52,6 +52,7 @@ export {
   AGENT_EVENT_NAME,
   approveAgentActionWithInvoker,
   cancelAgentActionWithInvoker,
+  cancelAgentRunWithInvoker,
   listPendingAgentActionsWithInvoker,
   rejectAgentActionWithInvoker,
   startAgentConversationTurnWithInvoker,

@@ -1,49 +1,51 @@
-import { CheckCircle2, ChevronDown, SquareTerminal, XCircle } from "lucide-react";
+import { CheckCircle2, SquareTerminal, XCircle } from "lucide-react";
 import type { AgentToolCall, AgentToolResult } from "@agent";
+import { useFrontendConfig } from "../../../../config/FrontendConfigProvider";
+import { AgentActivityDisclosure } from "./AgentActivityDisclosure";
 import { formatToolDetails, getToolCallLabel } from "./toolActivityUtils";
 
 interface GenericToolActivityProps {
+  cancelled?: boolean;
   call: AgentToolCall;
   result?: AgentToolResult;
 }
 
-export function GenericToolActivity({ call, result }: GenericToolActivityProps) {
-  const hasDetails = call.args !== undefined || call.reason || result;
+export function GenericToolActivity({ cancelled = false, call, result }: GenericToolActivityProps) {
+  const { t } = useFrontendConfig();
+  const hasDetails = Boolean(call.args !== undefined || call.reason || result);
   const Icon = result?.ok === false ? XCircle : result ? CheckCircle2 : SquareTerminal;
-  const isPending = !result;
+  const isPending = !result && !cancelled;
 
   return (
-    <details className="agent-activity">
-      <summary>
-        <Icon aria-hidden="true" />
-        <span className={isPending ? "agent-running-text" : undefined}>
-          {getToolCallLabel(call, result)}
-        </span>
-        {hasDetails && <ChevronDown className="agent-activity__chevron" aria-hidden="true" />}
-      </summary>
+    <AgentActivityDisclosure
+      hasDetails={hasDetails}
+      icon={Icon}
+      isPending={isPending}
+      label={getToolCallLabel(call, result, t, { cancelled })}
+    >
       {hasDetails && (
         <div className="agent-activity__details">
           {call.reason && <p>{call.reason}</p>}
           {call.args !== undefined && (
             <>
-              <span>参数</span>
+              <span>{t("agent.detail.args")}</span>
               <pre>{formatToolDetails(call.args)}</pre>
             </>
           )}
           {result?.error && (
             <>
-              <span>错误</span>
+              <span>{t("agent.detail.error")}</span>
               <pre>{result.error}</pre>
             </>
           )}
           {result?.result !== undefined && (
             <>
-              <span>结果</span>
+              <span>{t("agent.detail.result")}</span>
               <pre>{formatToolDetails(result.result)}</pre>
             </>
           )}
         </div>
       )}
-    </details>
+    </AgentActivityDisclosure>
   );
 }

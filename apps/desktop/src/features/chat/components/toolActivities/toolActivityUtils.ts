@@ -1,4 +1,6 @@
 import type { AgentToolCall, AgentToolResult } from "@agent";
+import type { TranslationKey } from "../../../../config/frontendTranslations";
+import { formatTranslation, type Translate } from "../../../../config/translationFormat";
 
 export function formatToolDetails(value: unknown) {
   if (typeof value === "string") return value;
@@ -10,39 +12,51 @@ export function formatToolDetails(value: unknown) {
   }
 }
 
-export function getToolDisplayName(tool: string) {
-  const labels: Record<string, string> = {
-    apply_patch: "应用修改",
-    attachments_list: "列出对话附件",
-    attachments_list_project: "列出项目附件",
-    generate_patch: "生成修改",
-    git_diff: "读取 Git diff",
-    read_file: "读取文件",
-    read_image: "读取图片",
-    read_pdf: "读取 PDF",
-    read_presentation: "读取演示文稿",
-    read_spreadsheet: "读取表格",
-    read_word: "读取文档",
-    run_command: "运行命令",
-    search_code: "搜索代码",
-    search_files: "列出文件",
-    web_fetch: "读取网页",
-    web_search: "联网搜索",
+export function getToolDisplayName(tool: string, t: Translate) {
+  const labels: Record<string, TranslationKey> = {
+    apply_patch: "tool.applyPatch",
+    attachments_list: "tool.attachmentsList",
+    attachments_list_project: "tool.attachmentsListProject",
+    generate_patch: "tool.generatePatch",
+    git_diff: "tool.gitDiff",
+    read_file: "tool.readFile",
+    read_image: "tool.readImage",
+    read_pdf: "tool.readPdf",
+    read_presentation: "tool.readPresentation",
+    read_spreadsheet: "tool.readSpreadsheet",
+    read_word: "tool.readWord",
+    run_command: "tool.runCommand",
+    search_code: "tool.searchCode",
+    search_files: "tool.searchFiles",
+    workspace_map: "tool.workspaceMap",
+    web_fetch: "tool.webFetch",
+    web_search: "tool.webSearch",
   };
 
-  return labels[tool] ?? tool;
+  const labelKey = labels[tool];
+  return labelKey ? t(labelKey) : tool;
 }
 
-export function getToolCallLabel(call: AgentToolCall, result?: AgentToolResult) {
-  const name = getToolDisplayName(call.tool);
+export function getToolCallLabel(
+  call: AgentToolCall,
+  result: AgentToolResult | undefined,
+  t: Translate,
+  options: { cancelled?: boolean } = {},
+) {
+  const tool = getToolDisplayName(call.tool, t);
 
   if (!result) {
-    return call.approvalStatus === "required" ? `等待审批 ${name}` : `正在${name}`;
+    if (options.cancelled) {
+      return formatTranslation(t, "agent.tool.cancelled", { tool });
+    }
+    return call.approvalStatus === "required"
+      ? formatTranslation(t, "agent.tool.waitingApproval", { tool })
+      : formatTranslation(t, "agent.tool.running", { tool });
   }
 
   if (!result.ok) {
-    return `${name}失败`;
+    return formatTranslation(t, "agent.tool.failed", { tool });
   }
 
-  return `已${name}`;
+  return formatTranslation(t, "agent.tool.completed", { tool });
 }

@@ -9,12 +9,37 @@ use crate::storage::{
     project_repository, storage_error, StorageState,
 };
 use base64::Engine;
-use rusqlite::Connection;
-use std::collections::HashMap;
+use rusqlite::{params, Connection};
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use tauri::{AppHandle, Manager, State};
+
+const ORPHAN_ATTACHMENT_CLEANUP_TASK_ID: &str = "orphan_attachment_cleanup_20260704";
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct AttachmentCleanupSummary {
+    pub files_removed: usize,
+    pub directories_removed: usize,
+    pub bytes_removed: u64,
+}
+
+pub fn run_orphan_attachment_cleanup_once(
+    connection: &Connection,
+    attachment_root: &Path,
+) -> Result<Option<AttachmentCleanupSummary>, String> {
+    if maintenance_task_completed(connection, ORPHAN_ATTACHMENT_CLEANUP_TASK_ID)
+        .map_err(storage_error)?
+    {
+        return Ok(None);
+    }
+
+    let summary = cleanup_orphan_attachment_files(connection, attachment_root)?;
+    mark_maintenance_task_completed(connection, ORPHAN_ATTACHMENT_CLEANUP_TASK_ID)
+        .map_err(storage_error)?;
+    Ok(Some(summary))
+}
 
 #[tauri::command]
 pub fn load_app_data(
@@ -137,9 +162,23 @@ pub fn save_project(
 }
 
 #[tauri::command]
-pub fn delete_project(state: State<'_, StorageState>, project_id: String) -> Result<(), String> {
-    let connection = state.connection()?;
-    project_repository::delete_project(&connection, &project_id).map_err(storage_error)
+pub fn delete_project(
+    state: State<'_, StorageState>,
+    app_handle: AppHandle,
+    project_id: String,
+) -> Result<(), String> {
+    let attachment_root = attachment_root(&app_handle)?;
+    let attachments = {
+        let connection = state.connection()?;
+        let attachments =
+            attachment_repository::list_project_deletion_attachments(&connection, &project_id)
+                .map_err(storage_error)?;
+        project_repository::delete_project(&connection, &project_id).map_err(storage_error)?;
+        attachments
+    };
+
+    cleanup_attachment_files(&attachment_root, attachments)
+        .map_err(|error| format!("项目已删除，但清理附件文件失败：{error}"))
 }
 
 #[tauri::command]
@@ -239,10 +278,22 @@ pub fn upsert_chat_messages(
 #[tauri::command]
 pub fn delete_conversation(
     state: State<'_, StorageState>,
+    app_handle: AppHandle,
     conversation_id: String,
 ) -> Result<(), String> {
-    let connection = state.connection()?;
-    chat_repository::delete_conversation(&connection, &conversation_id).map_err(storage_error)
+    let attachment_root = attachment_root(&app_handle)?;
+    let attachments = {
+        let connection = state.connection()?;
+        let attachments =
+            attachment_repository::list_conversation_attachments(&connection, &conversation_id)
+                .map_err(storage_error)?;
+        chat_repository::delete_conversation(&connection, &conversation_id)
+            .map_err(storage_error)?;
+        attachments
+    };
+
+    cleanup_attachment_files(&attachment_root, attachments)
+        .map_err(|error| format!("对话已删除，但清理附件文件失败：{error}"))
 }
 
 #[tauri::command]
@@ -427,6 +478,236 @@ fn safe_attachment_storage_path(attachment_root: &Path, storage_rel_path: &str) 
     Some(attachment_root.join(relative_path))
 }
 
+fn cleanup_attachment_files(
+    attachment_root: &Path,
+    attachments: Vec<AttachmentRecord>,
+) -> Result<(), String> {
+    let mut errors = Vec::new();
+
+    for attachment in attachments {
+        let Some(storage_path) =
+            safe_attachment_storage_path(attachment_root, &attachment.storage_rel_path)
+        else {
+            errors.push(format!("附件路径无效：{}", attachment.storage_rel_path));
+            continue;
+        };
+
+        match fs::remove_file(&storage_path) {
+            Ok(()) => {
+                prune_empty_attachment_dirs(attachment_root, storage_path.parent(), &mut errors)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                prune_empty_attachment_dirs(attachment_root, storage_path.parent(), &mut errors);
+            }
+            Err(error) => errors.push(format!("{}: {error}", attachment.storage_rel_path)),
+        }
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
+fn cleanup_orphan_attachment_files(
+    connection: &Connection,
+    attachment_root: &Path,
+) -> Result<AttachmentCleanupSummary, String> {
+    if !attachment_root.exists() {
+        return Ok(AttachmentCleanupSummary::default());
+    }
+
+    let referenced_paths = attachment_repository::list_attachment_storage_rel_paths(connection)
+        .map_err(storage_error)?
+        .into_iter()
+        .collect::<HashSet<_>>();
+    let mut summary = AttachmentCleanupSummary::default();
+    let mut errors = Vec::new();
+
+    cleanup_orphan_attachment_dir(
+        attachment_root,
+        attachment_root,
+        &referenced_paths,
+        &mut summary,
+        &mut errors,
+    );
+
+    if errors.is_empty() {
+        Ok(summary)
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
+fn cleanup_orphan_attachment_dir(
+    attachment_root: &Path,
+    current_dir: &Path,
+    referenced_paths: &HashSet<String>,
+    summary: &mut AttachmentCleanupSummary,
+    errors: &mut Vec<String>,
+) {
+    let entries = match fs::read_dir(current_dir) {
+        Ok(entries) => entries,
+        Err(error) => {
+            errors.push(format!(
+                "读取附件目录失败 {}: {error}",
+                current_dir.display()
+            ));
+            return;
+        }
+    };
+
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                errors.push(format!(
+                    "读取附件目录项失败 {}: {error}",
+                    current_dir.display()
+                ));
+                continue;
+            }
+        };
+        let path = entry.path();
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                errors.push(format!("读取附件路径失败 {}: {error}", path.display()));
+                continue;
+            }
+        };
+        let file_type = metadata.file_type();
+
+        if file_type.is_dir() {
+            cleanup_orphan_attachment_dir(
+                attachment_root,
+                &path,
+                referenced_paths,
+                summary,
+                errors,
+            );
+            remove_empty_attachment_dir(attachment_root, &path, summary, errors);
+            continue;
+        }
+
+        if !file_type.is_file() && !file_type.is_symlink() {
+            continue;
+        }
+
+        let Some(relative_path) = orphan_scan_relative_path(attachment_root, &path) else {
+            errors.push(format!("附件路径不在附件目录内：{}", path.display()));
+            continue;
+        };
+
+        if referenced_paths.contains(&relative_path) {
+            continue;
+        }
+
+        match fs::remove_file(&path) {
+            Ok(()) => {
+                summary.files_removed += 1;
+                summary.bytes_removed += metadata.len();
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => errors.push(format!("删除孤儿附件失败 {relative_path}: {error}")),
+        }
+    }
+}
+
+fn remove_empty_attachment_dir(
+    attachment_root: &Path,
+    path: &Path,
+    summary: &mut AttachmentCleanupSummary,
+    errors: &mut Vec<String>,
+) {
+    if path == attachment_root {
+        return;
+    }
+
+    match fs::remove_dir(path) {
+        Ok(()) => summary.directories_removed += 1,
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
+            ) => {}
+        Err(error) => errors.push(format!("删除空附件目录失败 {}: {error}", path.display())),
+    }
+}
+
+fn orphan_scan_relative_path(attachment_root: &Path, path: &Path) -> Option<String> {
+    let relative_path = path.strip_prefix(attachment_root).ok()?;
+    let parts = relative_path
+        .components()
+        .map(|component| match component {
+            Component::Normal(part) => Some(part.to_string_lossy().to_string()),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(parts.join("/"))
+}
+
+fn maintenance_task_completed(connection: &Connection, task_id: &str) -> rusqlite::Result<bool> {
+    let count: i64 = connection.query_row(
+        "
+        SELECT COUNT(*)
+        FROM maintenance_tasks
+        WHERE id = ?1
+        ",
+        params![task_id],
+        |row| row.get(0),
+    )?;
+
+    Ok(count > 0)
+}
+
+fn mark_maintenance_task_completed(connection: &Connection, task_id: &str) -> rusqlite::Result<()> {
+    connection.execute(
+        "
+        INSERT INTO maintenance_tasks (id, completed_at)
+        VALUES (?1, ?2)
+        ON CONFLICT(id) DO UPDATE SET
+            completed_at = excluded.completed_at
+        ",
+        params![task_id, now_ms()],
+    )?;
+
+    Ok(())
+}
+
+fn prune_empty_attachment_dirs(
+    attachment_root: &Path,
+    start: Option<&Path>,
+    errors: &mut Vec<String>,
+) {
+    let Some(mut current) = start.map(Path::to_path_buf) else {
+        return;
+    };
+
+    while current != attachment_root {
+        match fs::remove_dir(&current) {
+            Ok(()) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
+                ) =>
+            {
+                break;
+            }
+            Err(error) => {
+                errors.push(format!("{}: {error}", current.display()));
+                break;
+            }
+        }
+
+        if !current.pop() {
+            break;
+        }
+    }
+}
+
 fn profile_avatar_mime_type(path: &Path) -> Option<&'static str> {
     let extension = path.extension()?.to_str()?.to_ascii_lowercase();
     match extension.as_str() {
@@ -466,4 +747,170 @@ fn create_project_id(name: &str) -> String {
     }
 
     format!("project-{normalized}-{}", now_ms())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::{attachment_repository, migrations};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn test_attachment_root(name: &str) -> PathBuf {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be valid")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "my-copilot-attachment-cleanup-{name}-{}-{timestamp}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).expect("test attachment root should be created");
+        root
+    }
+
+    fn test_connection() -> Connection {
+        let connection = Connection::open_in_memory().expect("test database should open");
+        migrations::run_migrations(&connection).expect("test database should migrate");
+        connection
+    }
+
+    fn attachment_record(storage_rel_path: &str) -> AttachmentRecord {
+        AttachmentRecord {
+            id: "attachment-1".to_string(),
+            conversation_id: "conversation-1".to_string(),
+            message_id: "message-1".to_string(),
+            project_id: Some("project-1".to_string()),
+            kind: "file".to_string(),
+            original_name: "note.txt".to_string(),
+            mime_type: Some("text/plain".to_string()),
+            size_bytes: 4,
+            storage_rel_path: storage_rel_path.to_string(),
+            created_at: 1,
+        }
+    }
+
+    #[test]
+    fn cleanup_attachment_files_removes_file_and_empty_dirs() {
+        let root = test_attachment_root("removes-file");
+        let relative_path = "conversations/conversation-1/message-1/attachment-1/note.txt";
+        let storage_path = root.join(relative_path);
+        fs::create_dir_all(
+            storage_path
+                .parent()
+                .expect("attachment parent should exist"),
+        )
+        .expect("attachment parent should be created");
+        fs::write(&storage_path, b"test").expect("attachment file should be written");
+
+        cleanup_attachment_files(&root, vec![attachment_record(relative_path)])
+            .expect("attachment cleanup should succeed");
+
+        assert!(!storage_path.exists());
+        assert!(!root.join("conversations/conversation-1").exists());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn cleanup_attachment_files_rejects_paths_outside_attachment_root() {
+        let root = test_attachment_root("rejects-parent");
+
+        let result = cleanup_attachment_files(&root, vec![attachment_record("../outside.txt")]);
+
+        assert!(result.is_err());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn cleanup_orphan_attachment_files_removes_unreferenced_files_only() {
+        let connection = test_connection();
+        let root = test_attachment_root("orphan-files");
+        let referenced_path = "conversations/conversation-1/message-1/attachment-1/keep.txt";
+        let orphan_path = "conversations/conversation-1/message-1/attachment-2/remove.txt";
+        let referenced_storage_path = root.join(referenced_path);
+        let orphan_storage_path = root.join(orphan_path);
+
+        fs::create_dir_all(
+            referenced_storage_path
+                .parent()
+                .expect("referenced parent should exist"),
+        )
+        .expect("referenced parent should be created");
+        fs::write(&referenced_storage_path, b"keep").expect("referenced file should be written");
+        fs::create_dir_all(
+            orphan_storage_path
+                .parent()
+                .expect("orphan parent should exist"),
+        )
+        .expect("orphan parent should be created");
+        fs::write(&orphan_storage_path, b"remove").expect("orphan file should be written");
+
+        connection
+            .execute(
+                "
+                INSERT INTO conversations (
+                    id,
+                    project_id,
+                    model_id,
+                    title,
+                    created_at,
+                    updated_at,
+                    pinned_at,
+                    archived_at,
+                    unread_at
+                )
+                VALUES ('conversation-1', 'project-1', NULL, 'Test', 1, 1, NULL, NULL, NULL)
+                ",
+                [],
+            )
+            .expect("conversation should be inserted");
+        attachment_repository::save_attachment(&connection, &attachment_record(referenced_path))
+            .expect("referenced attachment should be saved");
+
+        let summary = cleanup_orphan_attachment_files(&connection, &root)
+            .expect("orphan attachment cleanup should succeed");
+
+        assert_eq!(summary.files_removed, 1);
+        assert_eq!(summary.bytes_removed, 6);
+        assert!(referenced_storage_path.exists());
+        assert!(!orphan_storage_path.exists());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn run_orphan_attachment_cleanup_once_skips_after_success() {
+        let connection = test_connection();
+        let root = test_attachment_root("once");
+        let orphan_path = root.join("conversations/conversation-1/message-1/attachment-1/old.txt");
+        fs::create_dir_all(orphan_path.parent().expect("orphan parent should exist"))
+            .expect("orphan parent should be created");
+        fs::write(&orphan_path, b"old").expect("orphan file should be written");
+
+        let first_summary = run_orphan_attachment_cleanup_once(&connection, &root)
+            .expect("first cleanup run should succeed")
+            .expect("first cleanup run should execute");
+
+        assert_eq!(first_summary.files_removed, 1);
+        assert!(!orphan_path.exists());
+
+        let second_orphan_path =
+            root.join("conversations/conversation-2/message-1/attachment-1/new.txt");
+        fs::create_dir_all(
+            second_orphan_path
+                .parent()
+                .expect("second orphan parent should exist"),
+        )
+        .expect("second orphan parent should be created");
+        fs::write(&second_orphan_path, b"new").expect("second orphan file should be written");
+
+        let second_summary = run_orphan_attachment_cleanup_once(&connection, &root)
+            .expect("second cleanup run should succeed");
+
+        assert!(second_summary.is_none());
+        assert!(second_orphan_path.exists());
+
+        let _ = fs::remove_dir_all(root);
+    }
 }

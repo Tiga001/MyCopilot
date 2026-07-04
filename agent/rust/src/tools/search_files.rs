@@ -1,6 +1,6 @@
 use super::{
-    relative_display, sanitize_limit, walk_workspace, AgentTool, ToolExecutionContext,
-    MAX_SEARCH_LIMIT,
+    relative_display, sanitize_limit, walk_workspace_with_cancellation, AgentTool,
+    ToolExecutionContext, MAX_SEARCH_LIMIT,
 };
 use crate::protocol::{AgentError, AgentResult, AgentToolDefinition, AgentToolSafety};
 use serde::Deserialize;
@@ -40,9 +40,11 @@ impl AgentTool for SearchFilesTool {
         let root = context.workspace_root()?;
         let needle = query.to_ascii_lowercase();
         let mut matches = Vec::new();
-        let walk = walk_workspace(&root)?;
+        let cancellation_token = context.cancellation_token();
+        let walk = walk_workspace_with_cancellation(&root, &cancellation_token)?;
 
         for entry in walk.entries {
+            cancellation_token.check()?;
             let relative = relative_display(&root, &entry.path);
             if !relative.to_ascii_lowercase().contains(&needle) {
                 continue;

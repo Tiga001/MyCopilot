@@ -95,3 +95,10 @@ export async function cancelAgentActionWithInvoker(
 ): Promise<boolean> {
   return invokeAgentCommand<boolean>("agent_cancel_action", { actionId });
 }
+
+export async function cancelAgentRunWithInvoker(
+  invokeAgentCommand: AgentCommandInvoker,
+  runId: string,
+): Promise<boolean> {
+  return invokeAgentCommand<boolean>("agent_cancel_run", { runId });
+}

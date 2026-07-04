@@ -43,6 +43,7 @@ React ChatComposer
 
 当前只读工具：
 
+- `workspace_map`: 梳理已选择 workspace 的文件树摘要、语言统计、关键文件和入口/测试/文档候选
 - `search_files`: 按 workspace 相对路径或文件名查找文件/目录
 - `search_code`: 在 UTF-8 文本文件中搜索内容
 - `read_file`: 读取 workspace 内的 UTF-8 文本文件片段

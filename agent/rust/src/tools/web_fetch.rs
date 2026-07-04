@@ -1,7 +1,11 @@
-use super::{truncate_chars, AgentTool, ToolExecutionContext};
+use super::{
+    block_on_tool_future, truncate_chars, web_favicon::FaviconFetcher, AgentTool,
+    ToolExecutionContext,
+};
+use crate::cancellation::AgentCancellationToken;
 use crate::protocol::{AgentError, AgentResult, AgentToolDefinition, AgentToolSafety};
-use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
+use reqwest::Client;
 use reqwest::Url;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -54,13 +58,18 @@ impl AgentTool for WebFetchTool {
         }
     }
 
-    fn execute(&self, _context: &ToolExecutionContext, args: Value) -> AgentResult<Value> {
+    fn execute(&self, context: &ToolExecutionContext, args: Value) -> AgentResult<Value> {
         let args: WebFetchArgs = serde_json::from_value(args)
             .map_err(|error| AgentError::new(format!("web_fetch 参数无效：{error}")))?;
         let request = TavilyExtractRequest::from_args(args)?;
-        let response = TavilyExtractClient::new(self.api_key.clone()).extract(&request)?;
+        let cancellation_token = context.cancellation_token();
+        cancellation_token.check()?;
+        let response = block_on_tool_future(
+            TavilyExtractClient::new(self.api_key.clone())
+                .extract(&request, cancellation_token.clone()),
+        )?;
 
-        Ok(format_tavily_extract_response(request, response))
+        format_tavily_extract_response(request, response, &cancellation_token)
     }
 }
 
@@ -128,7 +137,7 @@ impl TavilyExtractRequest {
             extract_depth,
             format,
             include_images: args.include_images.unwrap_or(false),
-            include_favicon: args.include_favicon.unwrap_or(false),
+            include_favicon: args.include_favicon.unwrap_or(true),
             timeout_seconds: args
                 .timeout_seconds
                 .unwrap_or(DEFAULT_TIMEOUT_SECONDS)
@@ -169,7 +178,12 @@ impl TavilyExtractClient {
         Self { api_key }
     }
 
-    fn extract(&self, request: &TavilyExtractRequest) -> AgentResult<Value> {
+    async fn extract(
+        &self,
+        request: &TavilyExtractRequest,
+        cancellation_token: AgentCancellationToken,
+    ) -> AgentResult<Value> {
+        cancellation_token.check()?;
         let api_key = self.api_key.trim();
         if api_key.is_empty() {
             return Err(AgentError::new("Tavily API Key 为空，无法执行 web_fetch。"));
@@ -191,12 +205,18 @@ impl TavilyExtractClient {
             .post(TAVILY_EXTRACT_ENDPOINT)
             .headers(headers)
             .json(&request.to_payload())
-            .send()
-            .map_err(|error| AgentError::new(format!("请求 Tavily 抽取失败：{error}")))?;
+            .send();
+        let response = tokio::select! {
+            _ = cancellation_token.cancelled() => return Err(AgentError::cancelled()),
+            response = response => response
+                .map_err(|error| AgentError::new(format!("请求 Tavily 抽取失败：{error}")))?,
+        };
         let status = response.status();
-        let body = response
-            .text()
-            .map_err(|error| AgentError::new(format!("读取 Tavily 响应失败：{error}")))?;
+        let body = tokio::select! {
+            _ = cancellation_token.cancelled() => return Err(AgentError::cancelled()),
+            body = response.text() => body
+                .map_err(|error| AgentError::new(format!("读取 Tavily 响应失败：{error}")))?,
+        };
 
         if !status.is_success() {
             let (body, _) = truncate_chars(&body, 600);
@@ -287,11 +307,53 @@ fn is_blocked_ipv4(ip: Ipv4Addr) -> bool {
         || ip.is_multicast()
 }
 
-fn format_tavily_extract_response(request: TavilyExtractRequest, response: Value) -> Value {
+fn format_tavily_extract_response(
+    request: TavilyExtractRequest,
+    response: Value,
+    cancellation_token: &AgentCancellationToken,
+) -> AgentResult<Value> {
+    let favicon_fetcher = FaviconFetcher::new();
+    format_tavily_extract_response_with_favicon_fetcher_and_cancellation(
+        request,
+        response,
+        &favicon_fetcher,
+        cancellation_token,
+    )
+}
+
+#[cfg(test)]
+fn format_tavily_extract_response_with_favicon_fetcher(
+    request: TavilyExtractRequest,
+    response: Value,
+    favicon_fetcher: &FaviconFetcher,
+) -> AgentResult<Value> {
+    let cancellation_token = AgentCancellationToken::new();
+    format_tavily_extract_response_with_favicon_fetcher_and_cancellation(
+        request,
+        response,
+        favicon_fetcher,
+        &cancellation_token,
+    )
+}
+
+fn format_tavily_extract_response_with_favicon_fetcher_and_cancellation(
+    request: TavilyExtractRequest,
+    response: Value,
+    favicon_fetcher: &FaviconFetcher,
+    cancellation_token: &AgentCancellationToken,
+) -> AgentResult<Value> {
+    cancellation_token.check()?;
     let result = response
         .get("results")
         .and_then(Value::as_array)
         .and_then(|results| results.first());
+    let url = result
+        .and_then(|result| result.get("url"))
+        .and_then(Value::as_str)
+        .unwrap_or(&request.url);
+    cancellation_token.check()?;
+    let favicon = result.and_then(|result| favicon_fetcher.fetch(result, url));
+    cancellation_token.check()?;
     let raw_results_len = response
         .get("results")
         .and_then(Value::as_array)
@@ -326,11 +388,8 @@ fn format_tavily_extract_response(request: TavilyExtractRequest, response: Value
         .or_else(|| response.get("responseTime"))
         .cloned();
 
-    json!({
-        "url": result
-            .and_then(|result| result.get("url"))
-            .and_then(Value::as_str)
-            .unwrap_or(&request.url),
+    Ok(json!({
+        "url": url,
         "requestedUrl": request.url,
         "provider": "tavily",
         "format": request.format,
@@ -341,13 +400,15 @@ fn format_tavily_extract_response(request: TavilyExtractRequest, response: Value
         "favicon": result
             .and_then(|result| result.get("favicon"))
             .and_then(Value::as_str),
+        "faviconDataUrl": favicon.as_ref().map(|asset| asset.data_url.as_str()),
+        "faviconMimeType": favicon.as_ref().map(|asset| asset.mime_type.as_str()),
         "failedResults": failed_results,
         "responseTime": response_time,
         "truncated": content_truncated
             || images_truncated
             || failed_results_truncated
             || raw_results_len > 1
-    })
+    }))
 }
 
 fn extract_content(result: &Value) -> Option<&str> {
@@ -487,12 +548,19 @@ mod tests {
             "response_time": 1.23
         });
 
-        let formatted = format_tavily_extract_response(request, response);
+        let formatted = format_tavily_extract_response_with_favicon_fetcher(
+            request,
+            response,
+            &FaviconFetcher::disabled(),
+        )
+        .unwrap();
 
         assert_eq!(formatted["provider"], "tavily");
         assert_eq!(formatted["content"], "hello\n...[truncated]");
         assert_eq!(formatted["rawContent"], "hello\n...[truncated]");
         assert_eq!(formatted["favicon"], "https://example.com/favicon.ico");
+        assert_eq!(formatted["faviconDataUrl"], Value::Null);
+        assert_eq!(formatted["faviconMimeType"], Value::Null);
         assert_eq!(formatted["truncated"], true);
     }
 }

@@ -10,9 +10,12 @@ mod read_word;
 mod run_command;
 mod search_code;
 mod search_files;
+mod web_favicon;
 mod web_fetch;
 mod web_search;
+mod workspace_map;
 
+use crate::cancellation::AgentCancellationToken;
 use crate::protocol::{
     AgentAttachmentLibraryContext, AgentAttachmentReference, AgentError, AgentProposedAction,
     AgentResult, AgentRunContext, AgentSearchConfig, AgentSearchMode, AgentToolCall,
@@ -34,11 +37,15 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fs;
 use std::fs::File;
+use std::future::Future;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::Duration;
 use web_fetch::WebFetchTool;
 use web_search::WebSearchTool;
+use workspace_map::WorkspaceMapTool;
 
 pub(super) const MAX_READ_FILE_BYTES: u64 = 512 * 1024;
 pub(super) const MAX_SEARCH_FILE_BYTES: u64 = 512 * 1024;
@@ -80,6 +87,7 @@ impl ToolRegistry {
         registry.register(ReadWordTool);
         registry.register(ReadPresentationTool);
         registry.register(ReadSpreadsheetTool);
+        registry.register(WorkspaceMapTool);
         registry.register(SearchFilesTool);
         registry.register(SearchCodeTool);
         if let Some(api_key) = tavily_api_key(search_config) {
@@ -110,6 +118,16 @@ impl ToolRegistry {
     }
 
     pub fn execute(&self, context: &ToolExecutionContext, call: &AgentToolCall) -> AgentToolResult {
+        if let Err(error) = context.check_cancelled() {
+            return AgentToolResult {
+                call_id: call.id.clone(),
+                tool: call.tool.clone(),
+                ok: false,
+                result: None,
+                error: Some(error.to_string()),
+            };
+        }
+
         let Some(tool) = self.tools.get(&call.tool) else {
             return AgentToolResult {
                 call_id: call.id.clone(),
@@ -121,12 +139,21 @@ impl ToolRegistry {
         };
 
         match tool.execute(context, call.args.clone()) {
-            Ok(result) => AgentToolResult {
-                call_id: call.id.clone(),
-                tool: call.tool.clone(),
-                ok: true,
-                result: Some(result),
-                error: None,
+            Ok(result) => match context.check_cancelled() {
+                Ok(()) => AgentToolResult {
+                    call_id: call.id.clone(),
+                    tool: call.tool.clone(),
+                    ok: true,
+                    result: Some(result),
+                    error: None,
+                },
+                Err(error) => AgentToolResult {
+                    call_id: call.id.clone(),
+                    tool: call.tool.clone(),
+                    ok: false,
+                    result: None,
+                    error: Some(error.to_string()),
+                },
             },
             Err(error) => AgentToolResult {
                 call_id: call.id.clone(),
@@ -163,6 +190,7 @@ fn tavily_api_key(search_config: Option<&AgentSearchConfig>) -> Option<String> {
 pub struct ToolExecutionContext {
     workspace_root: Option<PathBuf>,
     attachment_library: Option<AgentAttachmentLibraryContext>,
+    cancellation_token: AgentCancellationToken,
 }
 
 impl ToolExecutionContext {
@@ -176,10 +204,25 @@ impl ToolExecutionContext {
         Self {
             workspace_root,
             attachment_library,
+            cancellation_token: AgentCancellationToken::new(),
         }
     }
 
+    pub fn with_cancellation(mut self, cancellation_token: AgentCancellationToken) -> Self {
+        self.cancellation_token = cancellation_token;
+        self
+    }
+
+    pub(super) fn cancellation_token(&self) -> AgentCancellationToken {
+        self.cancellation_token.clone()
+    }
+
+    pub(super) fn check_cancelled(&self) -> AgentResult<()> {
+        self.cancellation_token.check()
+    }
+
     pub(super) fn workspace_root(&self) -> AgentResult<PathBuf> {
+        self.check_cancelled()?;
         let Some(root) = &self.workspace_root else {
             return Err(AgentError::new(
                 "没有已选择的 workspace，无法使用文件或 Git 只读工具。",
@@ -197,6 +240,7 @@ impl ToolExecutionContext {
     }
 
     pub(super) fn resolve_existing_path(&self, input_path: &str) -> AgentResult<PathBuf> {
+        self.check_cancelled()?;
         if is_attachment_path(input_path) {
             return self.resolve_attachment_path(input_path);
         }
@@ -216,6 +260,7 @@ impl ToolExecutionContext {
     }
 
     pub(super) fn display_path(&self, input_path: &str, file_path: &Path) -> AgentResult<String> {
+        self.check_cancelled()?;
         if is_attachment_path(input_path) {
             return self
                 .attachment_reference_for_path(input_path)
@@ -244,6 +289,7 @@ impl ToolExecutionContext {
     }
 
     fn resolve_attachment_path(&self, input_path: &str) -> AgentResult<PathBuf> {
+        self.check_cancelled()?;
         let reference = self.attachment_reference_for_path(input_path)?;
         let library = self.attachment_library.as_ref().ok_or_else(|| {
             AgentError::new("当前对话没有可用的附件库，无法读取 @attachments 路径。")
@@ -330,16 +376,21 @@ pub(super) struct WalkResult {
     pub truncated: bool,
 }
 
-pub(super) fn walk_workspace(root: &Path) -> AgentResult<WalkResult> {
+pub(super) fn walk_workspace_with_cancellation(
+    root: &Path,
+    cancellation_token: &AgentCancellationToken,
+) -> AgentResult<WalkResult> {
     let mut entries = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     let mut truncated = false;
 
     while let Some(directory) = stack.pop() {
+        cancellation_token.check()?;
         let read_dir = fs::read_dir(&directory)
             .map_err(|error| AgentError::new(format!("读取目录失败：{error}")))?;
 
         for item in read_dir {
+            cancellation_token.check()?;
             if entries.len() >= MAX_WALK_ENTRIES {
                 truncated = true;
                 break;
@@ -440,6 +491,16 @@ pub(super) fn truncate_chars(value: &str, max_chars: usize) -> (String, bool) {
     (output, truncated)
 }
 
+pub(super) fn block_on_tool_future<T>(
+    future: impl Future<Output = AgentResult<T>>,
+) -> AgentResult<T> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| AgentError::new(format!("创建工具异步运行时失败：{error}")))?;
+    runtime.block_on(future)
+}
+
 pub(super) struct ResolvedDocumentPath {
     pub file_path: PathBuf,
     pub relative_path: String,
@@ -457,6 +518,7 @@ pub(super) fn resolve_document_path(
     input_path: &str,
     allowed_extensions: &[&str],
 ) -> AgentResult<ResolvedDocumentPath> {
+    context.check_cancelled()?;
     let file_path = context.resolve_existing_path(input_path)?;
     let metadata = fs::metadata(&file_path)
         .map_err(|error| AgentError::new(format!("读取文件元数据失败：{error}")))?;
@@ -493,6 +555,7 @@ pub(super) fn resolve_document_path(
         )));
     }
 
+    context.check_cancelled()?;
     let relative_path = context.display_path(input_path, &file_path)?;
 
     Ok(ResolvedDocumentPath {
@@ -511,8 +574,10 @@ pub(super) fn sanitize_document_max_chars(max_chars: Option<usize>) -> usize {
 
 pub(super) fn read_zip_xml_text_parts(
     file_path: &Path,
+    cancellation_token: &AgentCancellationToken,
     include_entry: impl Fn(&str) -> bool,
 ) -> AgentResult<Vec<NamedText>> {
+    cancellation_token.check()?;
     let file = File::open(file_path)
         .map_err(|error| AgentError::new(format!("打开 OOXML 文档失败：{error}")))?;
     let mut archive = zip::ZipArchive::new(file)
@@ -520,6 +585,7 @@ pub(super) fn read_zip_xml_text_parts(
     let mut parts = Vec::new();
 
     for index in 0..archive.len() {
+        cancellation_token.check()?;
         let mut entry = archive
             .by_index(index)
             .map_err(|error| AgentError::new(format!("读取 OOXML 条目失败：{error}")))?;
@@ -532,12 +598,14 @@ pub(super) fn read_zip_xml_text_parts(
         entry
             .read_to_string(&mut xml)
             .map_err(|error| AgentError::new(format!("读取 OOXML XML 失败：{error}")))?;
+        cancellation_token.check()?;
         let text = xml_text_content(&xml)?;
         if !text.trim().is_empty() {
             parts.push(NamedText { name, text });
         }
     }
 
+    cancellation_token.check()?;
     parts.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(parts)
 }
@@ -584,18 +652,44 @@ pub(super) fn join_named_text(parts: &[NamedText]) -> String {
         .join("\n\n")
 }
 
-pub(super) fn extract_with_textutil(file_path: &Path) -> AgentResult<String> {
-    let output = Command::new("textutil")
+pub(super) fn extract_with_textutil(
+    file_path: &Path,
+    cancellation_token: &AgentCancellationToken,
+) -> AgentResult<String> {
+    cancellation_token.check()?;
+    let mut child = Command::new("textutil")
         .arg("-convert")
         .arg("txt")
         .arg("-stdout")
         .arg(file_path)
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|error| {
             AgentError::new(format!(
                 "读取旧版二进制 Office 文档需要系统 textutil 转换器，但启动失败：{error}"
             ))
         })?;
+
+    loop {
+        if cancellation_token.is_cancelled() {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(AgentError::cancelled());
+        }
+
+        match child
+            .try_wait()
+            .map_err(|error| AgentError::new(format!("等待 textutil 转换失败：{error}")))?
+        {
+            Some(_) => break,
+            None => thread::sleep(Duration::from_millis(50)),
+        }
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|error| AgentError::new(format!("读取 textutil 转换输出失败：{error}")))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

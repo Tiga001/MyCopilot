@@ -14,6 +14,11 @@ import type {
 import { THINKING_PLACEHOLDER } from "./appConstants";
 import { getAgentActionId } from "./agentActionUtils";
 import {
+  normalizeReadActivities,
+  upsertReadActivityFromCall,
+  upsertReadActivityFromResult,
+} from "../features/chat/agentReadActivities";
+import {
   normalizeWebSearchActivities,
   upsertWebSearchActivityFromCall,
   upsertWebSearchActivityFromResult,
@@ -37,6 +42,7 @@ function createAgentRun(
     diffs: [],
     commandOutputs: [],
     webSearchActivities: [],
+    readActivities: [],
     timeline: [],
   };
 }
@@ -57,6 +63,7 @@ export function ensureAgentRun(
     startedAt: currentRun.startedAt ?? Date.now(),
     completedAt: isCompletedAgentRunStatus(status) ? currentRun.completedAt ?? Date.now() : currentRun.completedAt,
     timeline: currentRun.timeline ?? [],
+    readActivities: currentRun.readActivities ?? [],
   };
 }
 
@@ -203,7 +210,7 @@ export function shouldTouchConversationForAgentEvent(agentEvent: AgentEvent) {
 
 function getChatMessageStatusFromAgentStatus(status: AgentChatOutput["status"]): ChatMessage["status"] {
   if (status === "running" || status === "waiting_for_approval") return "pending";
-  if (status === "failed" || status === "cancelled") return "error";
+  if (status === "failed") return "error";
   return "sent";
 }
 
@@ -282,6 +289,7 @@ export function applyAgentEventToChatMessage(message: ChatMessage, agentEvent: A
         status: "running",
         toolCalls: upsertById(currentRun.toolCalls, agentEvent.call, (call) => call.id),
         webSearchActivities: upsertWebSearchActivityFromCall(currentRun, agentEvent.call),
+        readActivities: upsertReadActivityFromCall(currentRun, agentEvent.call),
         timeline: appendTimelineItem(currentRun, {
           id: `tool-call-${agentEvent.call.id}`,
           type: "tool_call",
@@ -300,6 +308,7 @@ export function applyAgentEventToChatMessage(message: ChatMessage, agentEvent: A
         status: "running",
         toolResults: upsertById(currentRun.toolResults, agentEvent.result, (result) => result.callId),
         webSearchActivities: upsertWebSearchActivityFromResult(currentRun, agentEvent.result),
+        readActivities: upsertReadActivityFromResult(currentRun, agentEvent.result),
       },
     };
   }
@@ -392,7 +401,12 @@ export function applyAgentEventToChatMessage(message: ChatMessage, agentEvent: A
   return {
     ...message,
     content: getFinalMessageContent(message.content, agentEvent.content),
-    status: nextStatus === "waiting_for_approval" ? "pending" : agentEvent.success ? "sent" : "error",
+    status:
+      nextStatus === "waiting_for_approval"
+        ? "pending"
+        : nextStatus === "cancelled" || agentEvent.success
+          ? "sent"
+          : "error",
     agentRun: {
       ...currentRun,
       status: nextStatus,
@@ -499,6 +513,7 @@ export function applyAgentActionExecutionToChatMessage(
       ...currentRun,
       commandOutputs: [...currentRun.commandOutputs, ...commandOutputs],
       webSearchActivities: normalizeWebSearchActivities(currentRun),
+      readActivities: normalizeReadActivities(currentRun),
       timeline: [
         ...currentRun.timeline,
         ...commandOutputs.map(

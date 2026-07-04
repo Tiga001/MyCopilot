@@ -32,16 +32,20 @@ impl AgentTool for ReadPresentationTool {
     }
 
     fn execute(&self, context: &ToolExecutionContext, args: Value) -> AgentResult<Value> {
+        context.check_cancelled()?;
         let args: ReadPresentationArgs = serde_json::from_value(args)
             .map_err(|error| AgentError::new(format!("read_presentation 参数无效：{error}")))?;
         let path = args.path()?;
         let max_chars = sanitize_document_max_chars(args.max_chars);
         let resolved = resolve_document_path(context, path, &["pptx", "ppt"])?;
+        let cancellation_token = context.cancellation_token();
         let (text, slides, extractor) = match resolved.extension.as_str() {
             "pptx" => {
-                let mut slides = read_zip_xml_text_parts(&resolved.file_path, |name| {
-                    name.starts_with("ppt/slides/slide") && name.ends_with(".xml")
-                })?;
+                let mut slides =
+                    read_zip_xml_text_parts(&resolved.file_path, &cancellation_token, |name| {
+                        name.starts_with("ppt/slides/slide") && name.ends_with(".xml")
+                    })?;
+                cancellation_token.check()?;
                 sort_slide_parts(&mut slides);
                 let text = slides
                     .iter()
@@ -51,9 +55,14 @@ impl AgentTool for ReadPresentationTool {
                     .join("\n\n");
                 (text, slides.len(), "ooxml")
             }
-            "ppt" => (extract_with_textutil(&resolved.file_path)?, 1, "textutil"),
+            "ppt" => (
+                extract_with_textutil(&resolved.file_path, &cancellation_token)?,
+                1,
+                "textutil",
+            ),
             _ => unreachable!("extension validated before dispatch"),
         };
+        cancellation_token.check()?;
         let (text, truncated) = truncate_chars(&text, max_chars);
 
         Ok(json!({

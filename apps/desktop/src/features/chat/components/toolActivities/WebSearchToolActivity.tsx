@@ -1,6 +1,9 @@
-import { ChevronDown, Globe2 } from "lucide-react";
+import { Globe2 } from "lucide-react";
 import type { AgentToolCall, AgentToolResult } from "@agent";
+import { useFrontendConfig } from "../../../../config/FrontendConfigProvider";
+import type { Translate } from "../../../../config/translationFormat";
 import type { ChatWebSearchActivity } from "../../chatTypes";
+import { AgentActivityDisclosure } from "./AgentActivityDisclosure";
 import { WebSearchSourcesList } from "./WebSearchSources";
 
 interface WebSearchToolActivityProps {
@@ -9,13 +12,32 @@ interface WebSearchToolActivityProps {
   result?: AgentToolResult;
 }
 
-function getWebSearchStatusLabel(activity: ChatWebSearchActivity | undefined, result?: AgentToolResult) {
-  if (activity?.status === "failed" || result?.ok === false) return "联网搜索失败";
-  if (activity?.status === "completed" || result) return "已搜索网页";
-  return "正在联网搜索";
+function getWebActivityKind(call: AgentToolCall, activity: ChatWebSearchActivity | undefined) {
+  return activity?.kind ?? (call.tool === "web_fetch" ? "fetch" : "search");
 }
 
-export function WebSearchToolActivity({ activity, result }: WebSearchToolActivityProps) {
+function getWebActivityStatusLabel(
+  t: Translate,
+  kind: ChatWebSearchActivity["kind"],
+  activity: ChatWebSearchActivity | undefined,
+  result?: AgentToolResult,
+) {
+  if (kind === "fetch") {
+    if (activity?.status === "cancelled") return t("agent.web.fetch.cancelled");
+    if (activity?.status === "failed" || result?.ok === false) return t("agent.web.fetch.failed");
+    if (activity?.status === "completed" || result) return t("agent.web.fetch.completed");
+    return t("agent.web.fetch.running");
+  }
+
+  if (activity?.status === "cancelled") return t("agent.web.search.cancelled");
+  if (activity?.status === "failed" || result?.ok === false) return t("agent.web.search.failed");
+  if (activity?.status === "completed" || result) return t("agent.web.search.completed");
+  return t("agent.web.search.running");
+}
+
+export function WebSearchToolActivity({ activity, call, result }: WebSearchToolActivityProps) {
+  const { t } = useFrontendConfig();
+  const kind = getWebActivityKind(call, activity);
   const hasDetails = Boolean(
     activity?.query ||
       activity?.sources.length ||
@@ -23,39 +45,45 @@ export function WebSearchToolActivity({ activity, result }: WebSearchToolActivit
       activity?.error ||
       result?.error,
   );
-  const label = getWebSearchStatusLabel(activity, result);
-  const isPending = !result && activity?.status !== "completed" && activity?.status !== "failed";
+  const label = getWebActivityStatusLabel(t, kind, activity, result);
+  const isPending =
+    !result &&
+    activity?.status !== "completed" &&
+    activity?.status !== "failed" &&
+    activity?.status !== "cancelled";
+  const queryLabel = kind === "fetch" ? t("agent.web.query.fetch") : t("agent.web.query.search");
 
   return (
-    <details className="agent-activity agent-activity--web-search">
-      <summary>
-        <Globe2 aria-hidden="true" />
-        <span className={isPending ? "agent-running-text" : undefined}>{label}</span>
-        {hasDetails && <ChevronDown className="agent-activity__chevron" aria-hidden="true" />}
-      </summary>
+    <AgentActivityDisclosure
+      className="agent-activity--web-search"
+      hasDetails={hasDetails}
+      icon={Globe2}
+      isPending={isPending}
+      label={label}
+    >
       {hasDetails && (
         <div className="agent-activity__details web-search-activity__details">
           {activity?.query && (
             <p className="web-search-activity__query">
-              <span>搜索</span>
+              <span>{queryLabel}</span>
               {activity.query}
             </p>
           )}
           {activity?.error || result?.error ? (
             <>
-              <span>错误</span>
+              <span>{t("agent.detail.error")}</span>
               <pre>{activity?.error ?? result?.error}</pre>
             </>
           ) : null}
           {activity?.sources && <WebSearchSourcesList sources={activity.sources} />}
           {activity?.answer && (
             <p className="web-search-activity__answer">
-              <span>摘要</span>
+              <span>{t("agent.detail.summary")}</span>
               {activity.answer}
             </p>
           )}
         </div>
       )}
-    </details>
+    </AgentActivityDisclosure>
   );
 }

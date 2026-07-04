@@ -4,6 +4,7 @@ import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import "katex/dist/katex.min.css";
+import { openExternalUrl } from "../../../lib/externalLinks";
 
 interface ChatMarkdownProps {
   className?: string;
@@ -300,6 +301,36 @@ function normalizeMarkdownMath(content: string) {
   });
 }
 
+function normalizeMarkdownExternalHref(href: string | undefined) {
+  if (!href) return null;
+
+  const trimmedHref = href.trim();
+  if (!trimmedHref) return null;
+
+  let normalizedHref = trimmedHref;
+  if (normalizedHref.startsWith("//")) {
+    normalizedHref = `https:${normalizedHref}`;
+  } else if (/^www\./i.test(normalizedHref)) {
+    normalizedHref = `https://${normalizedHref}`;
+  } else if (/^[a-z0-9.-]+\.[a-z]{2,}(?::\d+)?(?:[/?#].*)?$/i.test(normalizedHref)) {
+    normalizedHref = `https://${normalizedHref}`;
+  }
+
+  try {
+    const url = new URL(normalizedHref);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function openMarkdownLink(href: string) {
+  void openExternalUrl(href).catch((error) => {
+    console.error("Failed to open markdown link", error);
+  });
+}
+
 export function ChatMarkdown({ className, content }: ChatMarkdownProps) {
   const markdownClassName = ["chat-markdown", className].filter(Boolean).join(" ");
   const normalizedContent = normalizeMarkdownMath(content);
@@ -310,11 +341,25 @@ export function ChatMarkdown({ className, content }: ChatMarkdownProps) {
         remarkPlugins={[remarkGfm, remarkMath, remarkBreaks]}
         rehypePlugins={[rehypeKatex]}
         components={{
-          a: ({ children, ...props }) => (
-            <a {...props} rel="noreferrer" target="_blank">
-              {children}
-            </a>
-          ),
+          a: ({ children, href, ...props }) => {
+            const normalizedHref = normalizeMarkdownExternalHref(href);
+
+            return (
+              <a
+                {...props}
+                href={normalizedHref ?? href}
+                onClick={(event) => {
+                  if (!normalizedHref) return;
+                  event.preventDefault();
+                  openMarkdownLink(normalizedHref);
+                }}
+                rel="noreferrer"
+                target="_blank"
+              >
+                {children}
+              </a>
+            );
+          },
         }}
       >
         {normalizedContent}

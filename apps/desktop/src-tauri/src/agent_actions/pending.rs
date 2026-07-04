@@ -102,6 +102,13 @@ impl AgentActionState {
             .ok_or_else(|| format!("未找到待审批 action：{action_id}"))
     }
 
+    pub fn clear_run(&self, run_id: &str) -> Result<usize, String> {
+        let mut pending = self.pending()?;
+        let before = pending.len();
+        pending.retain(|_, action| action.run_id != run_id);
+        Ok(before.saturating_sub(pending.len()))
+    }
+
     pub fn list(&self) -> Result<Vec<PendingAgentActionSnapshot>, String> {
         let pending = self.pending()?;
         let mut actions = pending

@@ -11,24 +11,53 @@ use crate::storage::{
 };
 use base64::Engine;
 use my_copilot_agent::{
-    next_run_id, send_chat_with_events, AgentAttachmentLibraryContext, AgentAttachmentReference,
-    AgentChatInput, AgentChatMessage, AgentEvent, AgentEventEmitter, AgentInputAttachment,
-    AgentInputAttachmentEncoding, AgentInputAttachmentKind, AgentPromptDetailLevel,
-    AgentPromptPreferences, AgentPromptTone, AgentPromptWorkMode, AgentRunContext, AgentRunMode,
-    AgentRunStatus, AgentSearchConfig, AgentSearchMode, AgentWorkspaceContext,
+    next_run_id, send_chat_with_events_and_cancellation, AgentAttachmentLibraryContext,
+    AgentAttachmentReference, AgentCancellationToken, AgentChatInput, AgentChatMessage, AgentEvent,
+    AgentEventEmitter, AgentInputAttachment, AgentInputAttachmentEncoding,
+    AgentInputAttachmentKind, AgentPromptDetailLevel, AgentPromptPreferences, AgentPromptTone,
+    AgentPromptWorkMode, AgentRunContext, AgentRunMode, AgentRunStatus, AgentSearchConfig,
+    AgentSearchMode, AgentWorkspaceContext,
 };
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{Emitter, Manager, State, Window};
 
 pub const AGENT_EVENT_NAME: &str = "agent_event";
 
 static ID_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Clone, Default)]
+pub struct AgentRunCancellationState {
+    flags: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+}
+
+impl AgentRunCancellationState {
+    fn register(&self, run_id: &str) -> Arc<AtomicBool> {
+        let flag = Arc::new(AtomicBool::new(false));
+        let mut flags = self.flags.lock().unwrap_or_else(|error| error.into_inner());
+        flags.insert(run_id.to_string(), flag.clone());
+        flag
+    }
+
+    fn cancel(&self, run_id: &str) -> bool {
+        let flags = self.flags.lock().unwrap_or_else(|error| error.into_inner());
+        let Some(flag) = flags.get(run_id) else {
+            return false;
+        };
+        flag.store(true, Ordering::SeqCst);
+        true
+    }
+
+    fn unregister(&self, run_id: &str) {
+        let mut flags = self.flags.lock().unwrap_or_else(|error| error.into_inner());
+        flags.remove(run_id);
+    }
+}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -68,17 +97,27 @@ struct PreparedConversationTurn {
 #[tauri::command]
 pub async fn agent_start_conversation_turn(
     input: AgentConversationTurnInput,
+    cancellation_state: State<'_, AgentRunCancellationState>,
     storage_state: State<'_, StorageState>,
     window: Window,
 ) -> Result<AgentConversationTurnOutput, String> {
     let run_id = next_run_id();
+    let cancel_flag = cancellation_state.register(&run_id);
+    let cancellation_state = cancellation_state.inner().clone();
     let attachment_root = window
         .app_handle()
         .path()
         .app_data_dir()
         .map_err(|error| format!("获取应用数据目录失败：{error}"))?
         .join("attachments");
-    let prepared = prepare_conversation_turn(&storage_state, input, &run_id, &attachment_root)?;
+    let prepared = match prepare_conversation_turn(&storage_state, input, &run_id, &attachment_root)
+    {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            cancellation_state.unregister(&run_id);
+            return Err(error);
+        }
+    };
     let output = prepared.output.clone();
     let worker_input = prepared.agent_input.clone();
     let worker_run_id = run_id.clone();
@@ -95,7 +134,11 @@ pub async fn agent_start_conversation_turn(
         let event_assistant_message_id = assistant_message_id.clone();
         let event_tool_calls = Arc::new(Mutex::new(HashMap::<String, String>::new()));
         let event_tool_calls_for_emitter = event_tool_calls.clone();
+        let event_cancel_flag = cancel_flag.clone();
         let emitter: AgentEventEmitter = Arc::new(move |event| {
+            if event_cancel_flag.load(Ordering::SeqCst) {
+                return;
+            }
             store_pending_action_from_event(
                 &event_app_handle,
                 &event_input,
@@ -107,39 +150,63 @@ pub async fn agent_start_conversation_turn(
             let _ = event_window.emit(AGENT_EVENT_NAME, event);
         });
 
-        match send_chat_with_events(worker_input.clone(), worker_run_id.clone(), emitter).await {
+        let runtime_cancellation_token = AgentCancellationToken::from_flag(cancel_flag.clone());
+        match send_chat_with_events_and_cancellation(
+            worker_input.clone(),
+            worker_run_id.clone(),
+            emitter,
+            runtime_cancellation_token,
+        )
+        .await
+        {
             Ok(agent_output) => {
-                persist_assistant_output(
-                    &app_handle,
-                    &conversation_id,
-                    &assistant_message_id,
-                    &agent_output.content,
-                    status_for_run(agent_output.status),
-                );
+                if !cancel_flag.load(Ordering::SeqCst) {
+                    persist_assistant_output(
+                        &app_handle,
+                        &conversation_id,
+                        &assistant_message_id,
+                        &agent_output.content,
+                        status_for_run(agent_output.status),
+                    );
 
-                let action_state = app_handle.state::<AgentActionState>();
-                action_state.store_output_actions_with_message(
-                    &worker_input,
-                    &agent_output,
-                    Some(conversation_id.clone()),
-                    Some(assistant_message_id.clone()),
-                );
+                    let action_state = app_handle.state::<AgentActionState>();
+                    action_state.store_output_actions_with_message(
+                        &worker_input,
+                        &agent_output,
+                        Some(conversation_id.clone()),
+                        Some(assistant_message_id.clone()),
+                    );
+                }
             }
             Err(error) => {
-                let message = error.to_string();
-                persist_assistant_output(
-                    &app_handle,
-                    &conversation_id,
-                    &assistant_message_id,
-                    &message,
-                    Some("error"),
-                );
-                emit_agent_error(&worker_window, &worker_run_id, message);
+                if !cancel_flag.load(Ordering::SeqCst) {
+                    let message = error.to_string();
+                    persist_assistant_output(
+                        &app_handle,
+                        &conversation_id,
+                        &assistant_message_id,
+                        &message,
+                        Some("error"),
+                    );
+                    emit_agent_error(&worker_window, &worker_run_id, message);
+                }
             }
         }
+        cancellation_state.unregister(&worker_run_id);
     });
 
     Ok(output)
+}
+
+#[tauri::command]
+pub fn agent_cancel_run(
+    run_id: String,
+    cancellation_state: State<'_, AgentRunCancellationState>,
+    action_state: State<'_, AgentActionState>,
+) -> Result<bool, String> {
+    let cancelled = cancellation_state.cancel(&run_id);
+    let _ = action_state.clear_run(&run_id);
+    Ok(cancelled)
 }
 
 fn prepare_conversation_turn(
@@ -678,11 +745,11 @@ fn upsert_message(messages: &mut Vec<ChatMessageRecord>, next: ChatMessageRecord
 
 fn status_for_run(status: AgentRunStatus) -> Option<&'static str> {
     match status {
-        AgentRunStatus::Completed => Some("sent"),
+        AgentRunStatus::Completed | AgentRunStatus::Cancelled => Some("sent"),
         AgentRunStatus::WaitingForApproval | AgentRunStatus::Running | AgentRunStatus::Idle => {
             Some("pending")
         }
-        AgentRunStatus::Failed | AgentRunStatus::Cancelled => Some("error"),
+        AgentRunStatus::Failed => Some("error"),
     }
 }
 

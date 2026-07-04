@@ -32,27 +32,35 @@ impl AgentTool for ReadWordTool {
     }
 
     fn execute(&self, context: &ToolExecutionContext, args: Value) -> AgentResult<Value> {
+        context.check_cancelled()?;
         let args: ReadWordArgs = serde_json::from_value(args)
             .map_err(|error| AgentError::new(format!("read_word 参数无效：{error}")))?;
         let path = args.path()?;
         let max_chars = sanitize_document_max_chars(args.max_chars);
         let resolved = resolve_document_path(context, path, &["docx", "doc"])?;
+        let cancellation_token = context.cancellation_token();
         let (text, part_count, extractor) = match resolved.extension.as_str() {
             "docx" => {
-                let parts = read_zip_xml_text_parts(&resolved.file_path, |name| {
-                    name == "word/document.xml"
-                        || name.starts_with("word/header")
-                        || name.starts_with("word/footer")
-                        || name.starts_with("word/footnotes")
-                        || name.starts_with("word/endnotes")
-                        || name.starts_with("word/comments")
-                })?;
+                let parts =
+                    read_zip_xml_text_parts(&resolved.file_path, &cancellation_token, |name| {
+                        name == "word/document.xml"
+                            || name.starts_with("word/header")
+                            || name.starts_with("word/footer")
+                            || name.starts_with("word/footnotes")
+                            || name.starts_with("word/endnotes")
+                            || name.starts_with("word/comments")
+                    })?;
                 let text = join_named_text(&parts);
                 (text, parts.len(), "ooxml")
             }
-            "doc" => (extract_with_textutil(&resolved.file_path)?, 1, "textutil"),
+            "doc" => (
+                extract_with_textutil(&resolved.file_path, &cancellation_token)?,
+                1,
+                "textutil",
+            ),
             _ => unreachable!("extension validated before dispatch"),
         };
+        cancellation_token.check()?;
         let (text, truncated) = truncate_chars(&text, max_chars);
 
         Ok(json!({

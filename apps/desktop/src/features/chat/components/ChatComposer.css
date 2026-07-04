@@ -1,10 +1,11 @@
 .chat-composer {
   display: grid;
+  grid-template-rows: minmax(38px, 1fr) auto;
   min-height: 96px;
-  padding: 12px 16px 10px;
+  padding: 14px 12px 4px 16px;
   color: var(--mc-color-text-primary);
   background: var(--mc-color-surface-elevated);
-  border: 1px solid var(--mc-color-border-default);
+  border: 0.5px solid var(--mc-color-border-subtle);
   border-radius: var(--mc-radius-composer);
   box-shadow: var(--mc-shadow-composer);
   container-type: inline-size;
@@ -46,7 +47,8 @@
   display: flex;
   align-items: center;
   min-width: 0;
-  gap: 12px;
+  min-height: 38px;
+  gap: 8px;
 }
 
 .chat-composer__toolbar button {
@@ -64,15 +66,15 @@
   align-items: center;
   min-height: 58px;
   padding: 10px 12px 10px;
-  margin: 10px -16px 0;
+  margin: 8px -12px -4px -16px;
   background: var(--mc-color-surface-muted);
   border-radius: var(--mc-radius-none) var(--mc-radius-none) var(--mc-radius-composer) var(--mc-radius-composer);
 }
 
 .chat-composer__toolbar svg {
-  width: var(--mc-icon-size-xl);
-  height: var(--mc-icon-size-xl);
-  stroke-width: var(--mc-icon-stroke-regular);
+  width: var(--mc-icon-size-lg);
+  height: var(--mc-icon-size-lg);
+  stroke-width: var(--mc-icon-stroke-thin);
 }
 
 .chat-composer__attachments {
@@ -221,29 +223,30 @@
 .composer-permission-button {
   display: inline-flex;
   align-items: center;
-  height: 34px;
+  height: 32px;
   padding: 0;
   color: var(--mc-color-icon-subtle);
   background: transparent;
-  border-radius: var(--mc-radius-md);
+  border-radius: var(--mc-radius-sm);
 }
 
 .composer-icon-button {
-  width: 34px;
+  width: 32px;
   justify-content: center;
 }
 
 .composer-model-button,
 .composer-permission-button {
-  gap: 6px;
-  padding: 0 4px;
+  gap: 5px;
+  padding: 0 3px;
   font-size: var(--mc-font-size-chat-toolbar);
-  font-weight: var(--mc-font-weight-bold);
+  font-weight: var(--mc-font-weight-strong);
 }
 
 .composer-add-picker {
   position: relative;
   display: inline-flex;
+  margin-left: -10px;
 }
 
 .composer-permission-picker,
@@ -311,8 +314,18 @@
 
 .composer-model-button {
   color: var(--mc-color-text-primary);
-  font-size: var(--mc-font-size-lg);
+}
+
+.composer-model-button,
+.composer-permission-button {
+  font-size: var(--mc-font-size-chat-toolbar);
   font-weight: var(--mc-font-weight-medium);
+}
+
+.composer-permission-button > svg:first-child {
+  width: var(--mc-icon-size-sm);
+  height: var(--mc-icon-size-sm);
+  stroke-width: var(--mc-icon-stroke-medium);
 }
 
 .composer-permission-menu {
@@ -615,13 +628,13 @@
 
 .chat-composer__spacer {
   flex: 1 1 auto;
-  min-width: 20px;
+  min-width: 16px;
 }
 
 .composer-submit-button {
   display: grid;
-  width: var(--mc-layout-composer-submit-size);
-  height: var(--mc-layout-composer-submit-size);
+  width: 36px;
+  height: 36px;
   place-items: center;
   color: var(--mc-color-text-inverse);
   background: var(--mc-color-text-primary);
@@ -644,8 +657,9 @@
 }
 
 .composer-submit-button svg {
-  width: var(--mc-icon-size-5xl);
-  height: var(--mc-icon-size-5xl);
+  width: 19px;
+  height: 19px;
+  stroke-width: var(--mc-icon-stroke-medium);
 }
 
 .composer-stop-square {

@@ -416,6 +416,7 @@ pub enum AgentEvent {
 #[derive(Debug, Clone)]
 pub struct AgentError {
     message: String,
+    cancelled: bool,
 }
 
 pub type AgentResult<T> = Result<T, AgentError>;
@@ -424,7 +425,19 @@ impl AgentError {
     pub fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            cancelled: false,
         }
+    }
+
+    pub fn cancelled() -> Self {
+        Self {
+            message: "agent run 已取消。".to_string(),
+            cancelled: true,
+        }
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled
     }
 }
 

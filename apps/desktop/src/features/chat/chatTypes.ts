@@ -33,14 +33,37 @@ export interface ChatWebSearchSource {
 
 export interface ChatWebSearchActivity {
   callId: string;
+  kind?: "search" | "fetch";
   query: string;
   provider: string;
-  status: "running" | "completed" | "failed";
+  status: "running" | "completed" | "failed" | "cancelled";
   sources: ChatWebSearchSource[];
   answer?: string;
   error?: string;
   responseTime?: number | string | null;
   truncated?: boolean;
+  updatedAt: number;
+}
+
+export type ChatReadActivityKind =
+  | "file"
+  | "image"
+  | "pdf"
+  | "word"
+  | "presentation"
+  | "spreadsheet";
+
+export interface ChatReadActivity {
+  callId: string;
+  tool: AgentToolCall["tool"];
+  kind: ChatReadActivityKind;
+  status: "running" | "completed" | "failed" | "cancelled";
+  path: string;
+  fileName: string;
+  extension?: string;
+  mimeType?: string;
+  thumbnailDataUrl?: string;
+  error?: string;
   updatedAt: number;
 }
 
@@ -63,6 +86,7 @@ export interface ChatAgentRunView {
   toolCalls: AgentToolCall[];
   toolResults: AgentToolResult[];
   webSearchActivities?: ChatWebSearchActivity[];
+  readActivities?: ChatReadActivity[];
   approvals: AgentProposedAction[];
   diffs: AgentDiffProposal[];
   commandOutputs: ChatAgentCommandOutput[];

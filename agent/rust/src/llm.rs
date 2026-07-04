@@ -1,3 +1,4 @@
+use crate::cancellation::AgentCancellationToken;
 use crate::protocol::{AgentApiStyle, AgentError, AgentResult, AgentToolDefinition, AgentUsage};
 use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
@@ -107,15 +108,15 @@ pub(crate) struct LlmToolCall {
     pub args: Value,
 }
 
-pub(crate) async fn complete_chat(request: LlmChatRequest) -> AgentResult<LlmChatResponse> {
+pub(crate) async fn complete_chat(
+    request: LlmChatRequest,
+    cancellation_token: AgentCancellationToken,
+) -> AgentResult<LlmChatResponse> {
     let mut request = request;
     request.stream = false;
     let api_style = request.api_style;
-    let response = send_llm_request(&request).await?;
-    let body = response
-        .text()
-        .await
-        .map_err(|error| AgentError::new(format!("读取模型响应失败：{error}")))?;
+    let response = send_llm_request(&request, cancellation_token.clone()).await?;
+    let body = response_text(response, cancellation_token.clone(), "读取模型响应失败").await?;
 
     let value: Value = serde_json::from_str(&body).map_err(|error| {
         AgentError::new(format!(
@@ -142,6 +143,7 @@ pub(crate) async fn complete_chat(request: LlmChatRequest) -> AgentResult<LlmCha
 
 pub(crate) async fn complete_chat_streaming<F>(
     request: LlmChatRequest,
+    cancellation_token: AgentCancellationToken,
     mut on_delta: F,
 ) -> AgentResult<LlmChatResponse>
 where
@@ -150,12 +152,9 @@ where
     let mut request = request;
     request.stream = true;
     let api_style = request.api_style;
-    let response = send_llm_request(&request).await?;
+    let response = send_llm_request(&request, cancellation_token.clone()).await?;
     if !is_sse_response(&response) {
-        let body = response
-            .text()
-            .await
-            .map_err(|error| AgentError::new(format!("读取模型响应失败：{error}")))?;
+        let body = response_text(response, cancellation_token.clone(), "读取模型响应失败").await?;
         let value: Value = serde_json::from_str(&body).map_err(|error| {
             AgentError::new(format!(
                 "模型响应不是有效 JSON：{error}；原始响应：{}",
@@ -180,7 +179,7 @@ where
         });
     }
 
-    let streamed = parse_sse_response(response, api_style, on_delta).await?;
+    let streamed = parse_sse_response(response, api_style, cancellation_token, on_delta).await?;
 
     validate_llm_response(
         &streamed.content,
@@ -190,7 +189,11 @@ where
     Ok(streamed)
 }
 
-async fn send_llm_request(request: &LlmChatRequest) -> AgentResult<reqwest::Response> {
+async fn send_llm_request(
+    request: &LlmChatRequest,
+    cancellation_token: AgentCancellationToken,
+) -> AgentResult<reqwest::Response> {
+    cancellation_token.check()?;
     validate_request(request)?;
     let payload = build_payload(request);
     let headers = build_headers(request.api_style, request.api_token.trim())?;
@@ -199,20 +202,21 @@ async fn send_llm_request(request: &LlmChatRequest) -> AgentResult<reqwest::Resp
         .build()
         .map_err(|error| AgentError::new(format!("创建 HTTP 客户端失败：{error}")))?;
 
-    let response = client
+    let send = client
         .post(request.api_url.trim())
         .headers(headers)
         .json(&payload)
-        .send()
-        .await
-        .map_err(|error| AgentError::new(format!("请求模型接口失败：{error}")))?;
+        .send();
+    let response = tokio::select! {
+        _ = cancellation_token.cancelled() => return Err(AgentError::cancelled()),
+        response = send => response
+            .map_err(|error| AgentError::new(format!("请求模型接口失败：{error}")))?,
+    };
 
     let status = response.status();
     if !status.is_success() {
-        let body = response
-            .text()
-            .await
-            .map_err(|error| AgentError::new(format!("读取模型错误响应失败：{error}")))?;
+        let body =
+            response_text(response, cancellation_token.clone(), "读取模型错误响应失败").await?;
         return Err(AgentError::new(format!(
             "模型接口返回 {}：{}",
             status.as_u16(),
@@ -221,6 +225,19 @@ async fn send_llm_request(request: &LlmChatRequest) -> AgentResult<reqwest::Resp
     }
 
     Ok(response)
+}
+
+async fn response_text(
+    response: reqwest::Response,
+    cancellation_token: AgentCancellationToken,
+    error_prefix: &str,
+) -> AgentResult<String> {
+    cancellation_token.check()?;
+    let read = response.text();
+    tokio::select! {
+        _ = cancellation_token.cancelled() => Err(AgentError::cancelled()),
+        body = read => body.map_err(|error| AgentError::new(format!("{error_prefix}：{error}"))),
+    }
 }
 
 fn validate_request(request: &LlmChatRequest) -> AgentResult<()> {
@@ -282,6 +299,7 @@ fn extract_api_error(value: &Value) -> Option<String> {
 async fn parse_sse_response<F>(
     response: reqwest::Response,
     api_style: AgentApiStyle,
+    cancellation_token: AgentCancellationToken,
     mut on_delta: F,
 ) -> AgentResult<LlmChatResponse>
 where
@@ -291,11 +309,21 @@ where
     let mut buffer = Vec::<u8>::new();
     let mut accumulator = LlmStreamAccumulator::new(api_style);
 
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|error| AgentError::new(format!("读取模型流失败：{error}")))?;
+    loop {
+        cancellation_token.check()?;
+        let chunk = tokio::select! {
+            _ = cancellation_token.cancelled() => return Err(AgentError::cancelled()),
+            chunk = stream.next() => {
+                let Some(chunk) = chunk else {
+                    break;
+                };
+                chunk.map_err(|error| AgentError::new(format!("读取模型流失败：{error}")))?
+            }
+        };
         buffer.extend_from_slice(&chunk);
 
         while let Some((frame_end, separator_len)) = find_sse_frame_end(&buffer) {
+            cancellation_token.check()?;
             let frame_bytes = buffer[..frame_end].to_vec();
             buffer.drain(..frame_end + separator_len);
             let frame = String::from_utf8(frame_bytes)
@@ -304,6 +332,7 @@ where
         }
     }
 
+    cancellation_token.check()?;
     if !buffer.iter().all(u8::is_ascii_whitespace) {
         let frame = String::from_utf8(buffer)
             .map_err(|error| AgentError::new(format!("模型流尾部不是有效 UTF-8：{error}")))?;

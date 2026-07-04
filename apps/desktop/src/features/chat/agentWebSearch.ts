@@ -20,6 +20,21 @@ interface WebSearchResultItem {
   publishedDate?: unknown;
 }
 
+interface WebFetchResultPayload {
+  url?: unknown;
+  requestedUrl?: unknown;
+  provider?: unknown;
+  content?: unknown;
+  rawContent?: unknown;
+  faviconDataUrl?: unknown;
+  faviconMimeType?: unknown;
+  responseTime?: unknown;
+  truncated?: unknown;
+}
+
+const WEB_ACTIVITY_TOOLS = new Set(["web_search", "web_fetch"]);
+const WEB_FETCH_SUMMARY_MAX_CHARS = 1_200;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
@@ -43,8 +58,17 @@ function responseTimeValue(value: unknown) {
   return null;
 }
 
+export function isWebActivityTool(tool: string) {
+  return WEB_ACTIVITY_TOOLS.has(tool);
+}
+
+function kindFromTool(tool: string): ChatWebSearchActivity["kind"] {
+  return tool === "web_fetch" ? "fetch" : "search";
+}
+
 function queryFromCall(call: AgentToolCall) {
   if (!isRecord(call.args)) return "";
+  if (call.tool === "web_fetch") return stringValue(call.args.url);
   return stringValue(call.args.query);
 }
 
@@ -67,6 +91,21 @@ function displayUrlFromUrl(url: URL) {
 
 function sourceId(callId: string, url: string, index: number) {
   return `${callId}:source:${index}:${url}`;
+}
+
+function normalizeFaviconDataUrl(value: unknown) {
+  const faviconDataUrl = stringValue(value);
+  return faviconDataUrl.startsWith("data:image/") ? faviconDataUrl : undefined;
+}
+
+function normalizeFaviconMimeType(value: unknown) {
+  const faviconMimeType = stringValue(value);
+  return faviconMimeType.startsWith("image/") ? faviconMimeType : undefined;
+}
+
+function truncateWebFetchSummary(content: string) {
+  if (content.length <= WEB_FETCH_SUMMARY_MAX_CHARS) return content;
+  return `${content.slice(0, WEB_FETCH_SUMMARY_MAX_CHARS).trimEnd()}\n...[truncated]`;
 }
 
 export function compareWebSearchSourcesByRelevance(
@@ -96,8 +135,6 @@ function normalizeWebSearchSources(callId: string, results: unknown): ChatWebSea
     seenUrls.add(normalizedUrl);
 
     const title = stringValue(result.title) || url.hostname;
-    const faviconDataUrl = stringValue(result.faviconDataUrl);
-    const faviconMimeType = stringValue(result.faviconMimeType);
     const snippet = stringValue(result.content);
     const publishedDate = stringValue(result.publishedDate);
 
@@ -107,8 +144,8 @@ function normalizeWebSearchSources(callId: string, results: unknown): ChatWebSea
       url: normalizedUrl,
       displayUrl: displayUrlFromUrl(url),
       domain: url.hostname.replace(/^www\./, ""),
-      faviconDataUrl: faviconDataUrl.startsWith("data:image/") ? faviconDataUrl : undefined,
-      faviconMimeType: faviconMimeType.startsWith("image/") ? faviconMimeType : undefined,
+      faviconDataUrl: normalizeFaviconDataUrl(result.faviconDataUrl),
+      faviconMimeType: normalizeFaviconMimeType(result.faviconMimeType),
       snippet: snippet || undefined,
       score: numberValue(result.score),
       publishedDate: publishedDate || undefined,
@@ -118,17 +155,47 @@ function normalizeWebSearchSources(callId: string, results: unknown): ChatWebSea
   return sources.sort(compareWebSearchSourcesByRelevance);
 }
 
+function normalizeWebFetchSources(callId: string, payload: WebFetchResultPayload): ChatWebSearchSource[] {
+  const url = validHttpUrl(payload.url) ?? validHttpUrl(payload.requestedUrl);
+  if (!url) return [];
+
+  const normalizedUrl = url.toString();
+  const content = stringValue(payload.content) || stringValue(payload.rawContent);
+
+  return [
+    {
+      id: sourceId(callId, normalizedUrl, 0),
+      title: url.hostname,
+      url: normalizedUrl,
+      displayUrl: displayUrlFromUrl(url),
+      domain: url.hostname.replace(/^www\./, ""),
+      faviconDataUrl: normalizeFaviconDataUrl(payload.faviconDataUrl),
+      faviconMimeType: normalizeFaviconMimeType(payload.faviconMimeType),
+      snippet: content ? truncateWebFetchSummary(content) : undefined,
+    },
+  ];
+}
+
 function activityFromResult(
   previous: ChatWebSearchActivity | undefined,
   result: AgentToolResult,
 ): ChatWebSearchActivity {
-  const payload = isRecord(result.result) ? (result.result as WebSearchResultPayload) : {};
-  const query = stringValue(payload.query) || previous?.query || "";
+  const payload = isRecord(result.result) ? result.result : {};
+  const isFetch = result.tool === "web_fetch";
+  const searchPayload = payload as WebSearchResultPayload;
+  const fetchPayload = payload as WebFetchResultPayload;
+  const query =
+    (isFetch
+      ? stringValue(fetchPayload.url) || stringValue(fetchPayload.requestedUrl)
+      : stringValue(searchPayload.query)) ||
+    previous?.query ||
+    "";
   const provider = stringValue(payload.provider) || previous?.provider || "web";
 
   if (!result.ok) {
     return {
       callId: result.callId,
+      kind: previous?.kind ?? kindFromTool(result.tool),
       query,
       provider,
       status: "failed",
@@ -141,14 +208,19 @@ function activityFromResult(
     };
   }
 
-  const answer = stringValue(payload.answer);
+  const answer = isFetch
+    ? truncateWebFetchSummary(stringValue(fetchPayload.content) || stringValue(fetchPayload.rawContent))
+    : stringValue(searchPayload.answer);
 
   return {
     callId: result.callId,
+    kind: previous?.kind ?? kindFromTool(result.tool),
     query,
     provider,
     status: "completed",
-    sources: normalizeWebSearchSources(result.callId, payload.results),
+    sources: isFetch
+      ? normalizeWebFetchSources(result.callId, fetchPayload)
+      : normalizeWebSearchSources(result.callId, searchPayload.results),
     answer: answer || undefined,
     error: undefined,
     responseTime: responseTimeValue(payload.responseTime),
@@ -172,10 +244,11 @@ function upsertActivity(
 }
 
 export function webSearchActivityFromCall(call: AgentToolCall): ChatWebSearchActivity | null {
-  if (call.tool !== "web_search") return null;
+  if (!isWebActivityTool(call.tool)) return null;
 
   return {
     callId: call.id,
+    kind: kindFromTool(call.tool),
     query: queryFromCall(call),
     provider: "tavily",
     status: "running",
@@ -208,7 +281,7 @@ export function upsertWebSearchActivityFromResult(
   run: ChatAgentRunView,
   result: AgentToolResult,
 ): ChatWebSearchActivity[] | undefined {
-  if (result.tool !== "web_search") return run.webSearchActivities;
+  if (!isWebActivityTool(result.tool)) return run.webSearchActivities;
 
   const previous = run.webSearchActivities?.find((activity) => activity.callId === result.callId);
   return upsertActivity(run.webSearchActivities, activityFromResult(previous, result));
@@ -218,7 +291,7 @@ export function normalizeWebSearchActivities(run: ChatAgentRunView): ChatWebSear
   const activities = run.webSearchActivities ?? [];
 
   return run.toolCalls.reduce<ChatWebSearchActivity[]>((currentActivities, call) => {
-    if (call.tool !== "web_search") return currentActivities;
+    if (!isWebActivityTool(call.tool)) return currentActivities;
 
     const callActivity =
       currentActivities.find((activity) => activity.callId === call.id) ??
@@ -229,6 +302,26 @@ export function normalizeWebSearchActivities(run: ChatAgentRunView): ChatWebSear
     const nextActivity = result ? activityFromResult(callActivity, result) : callActivity;
     return upsertActivity(currentActivities, nextActivity);
   }, activities);
+}
+
+export function cancelPendingWebSearchActivities(
+  run: ChatAgentRunView,
+  cancelledAt: number,
+): ChatWebSearchActivity[] | undefined {
+  return run.toolCalls.reduce<ChatWebSearchActivity[] | undefined>((activities, call) => {
+    if (!isWebActivityTool(call.tool)) return activities;
+    if (run.toolResults.some((result) => result.callId === call.id)) return activities;
+
+    const previous = activities?.find((activity) => activity.callId === call.id);
+    const activity = previous ?? webSearchActivityFromCall(call);
+    if (!activity || activity.status !== "running") return activities;
+
+    return upsertActivity(activities, {
+      ...activity,
+      status: "cancelled",
+      updatedAt: cancelledAt,
+    });
+  }, run.webSearchActivities);
 }
 
 export function getUniqueWebSearchSources(run: ChatAgentRunView | undefined): ChatWebSearchSource[] {

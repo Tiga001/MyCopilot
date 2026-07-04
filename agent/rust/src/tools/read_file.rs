@@ -32,10 +32,12 @@ impl AgentTool for ReadFileTool {
     }
 
     fn execute(&self, context: &ToolExecutionContext, args: Value) -> AgentResult<Value> {
+        context.check_cancelled()?;
         let args: ReadFileArgs = serde_json::from_value(args)
             .map_err(|error| AgentError::new(format!("read_file 参数无效：{error}")))?;
         let path = args.path()?;
         let file_path = context.resolve_existing_path(path)?;
+        context.check_cancelled()?;
         let metadata = fs::metadata(&file_path)
             .map_err(|error| AgentError::new(format!("读取文件元数据失败：{error}")))?;
 
@@ -53,6 +55,7 @@ impl AgentTool for ReadFileTool {
 
         let content = fs::read_to_string(&file_path)
             .map_err(|error| AgentError::new(format!("读取文件失败：{error}")))?;
+        context.check_cancelled()?;
         let lines: Vec<&str> = content.lines().collect();
         let total_lines = lines.len();
         let start_line = args.start_line.unwrap_or(1).max(1);

@@ -1,3 +1,4 @@
+use crate::cancellation::AgentCancellationToken;
 use crate::llm::{
     complete_chat, complete_chat_streaming, detect_api_style, LlmChatRequest, LlmImage, LlmMessage,
     LlmMessageRole, LlmToolCall,
@@ -39,8 +40,23 @@ pub async fn send_chat_with_events(
     run_id: String,
     emitter: AgentEventEmitter,
 ) -> AgentResult<AgentChatOutput> {
+    send_chat_with_events_and_cancellation(input, run_id, emitter, AgentCancellationToken::new())
+        .await
+}
+
+pub async fn send_chat_with_events_and_cancellation(
+    input: AgentChatInput,
+    run_id: String,
+    emitter: AgentEventEmitter,
+    cancellation_token: AgentCancellationToken,
+) -> AgentResult<AgentChatOutput> {
     AgentRuntime::default()
-        .send_chat_with_events(input, Some(run_id), Some(emitter))
+        .send_chat_with_events_and_cancellation(
+            input,
+            Some(run_id),
+            Some(emitter),
+            cancellation_token,
+        )
         .await
 }
 
@@ -71,6 +87,22 @@ impl AgentRuntime {
         run_id: Option<String>,
         emitter: Option<AgentEventEmitter>,
     ) -> AgentResult<AgentChatOutput> {
+        self.send_chat_with_events_and_cancellation(
+            input,
+            run_id,
+            emitter,
+            AgentCancellationToken::new(),
+        )
+        .await
+    }
+
+    pub async fn send_chat_with_events_and_cancellation(
+        &self,
+        input: AgentChatInput,
+        run_id: Option<String>,
+        emitter: Option<AgentEventEmitter>,
+        cancellation_token: AgentCancellationToken,
+    ) -> AgentResult<AgentChatOutput> {
         let run_id = run_id.unwrap_or_else(generate_run_id);
         let context = input.context.clone();
         let tool_registry = Arc::new(ToolRegistry::read_only_defaults_with_search(
@@ -84,7 +116,8 @@ impl AgentRuntime {
         });
         let llm_request = build_llm_request(input, &tool_definitions)?;
         let mut messages = llm_request.messages;
-        let tool_context = ToolExecutionContext::from_run_context(context.as_ref());
+        let tool_context = ToolExecutionContext::from_run_context(context.as_ref())
+            .with_cancellation(cancellation_token.clone());
         event_stream.emit(state_event(
             &run_id,
             AgentRunStatus::Running,
@@ -94,8 +127,26 @@ impl AgentRuntime {
         let mut usage = None;
         let mut finish_reason = None;
         let mut final_content = None;
+        if cancellation_token.is_cancelled() {
+            return Ok(cancelled_output(
+                run_id,
+                event_stream,
+                tool_definitions,
+                usage,
+                finish_reason,
+            ));
+        }
 
         for iteration in 0..=self.max_tool_iterations {
+            if cancellation_token.is_cancelled() {
+                return Ok(cancelled_output(
+                    run_id,
+                    event_stream,
+                    tool_definitions,
+                    usage,
+                    finish_reason,
+                ));
+            }
             let request = LlmChatRequest {
                 api_url: llm_request.api_url.clone(),
                 api_token: llm_request.api_token.clone(),
@@ -107,9 +158,13 @@ impl AgentRuntime {
                 messages: messages.clone(),
                 tools: llm_request.tools.clone(),
             };
-            let llm_response = if request.stream {
+            let llm_response_result = if request.stream {
                 let delta_run_id = run_id.clone();
-                complete_chat_streaming(request, |delta| {
+                let delta_cancellation_token = cancellation_token.clone();
+                complete_chat_streaming(request, cancellation_token.clone(), |delta| {
+                    if delta_cancellation_token.is_cancelled() {
+                        return;
+                    }
                     if !delta.is_empty() {
                         event_stream.emit(AgentEvent::MessageDelta {
                             run_id: delta_run_id.clone(),
@@ -117,10 +172,32 @@ impl AgentRuntime {
                         });
                     }
                 })
-                .await?
+                .await
             } else {
-                complete_chat(request).await?
+                complete_chat(request, cancellation_token.clone()).await
             };
+            let llm_response = match llm_response_result {
+                Ok(response) => response,
+                Err(error) if error.is_cancelled() => {
+                    return Ok(cancelled_output(
+                        run_id,
+                        event_stream,
+                        tool_definitions,
+                        usage,
+                        finish_reason,
+                    ));
+                }
+                Err(error) => return Err(error),
+            };
+            if cancellation_token.is_cancelled() {
+                return Ok(cancelled_output(
+                    run_id,
+                    event_stream,
+                    tool_definitions,
+                    usage,
+                    finish_reason,
+                ));
+            }
 
             merge_usage(&mut usage, llm_response.usage);
             finish_reason = llm_response.finish_reason;
@@ -153,6 +230,15 @@ impl AgentRuntime {
             ));
 
             for tool_request in tool_requests {
+                if cancellation_token.is_cancelled() {
+                    return Ok(cancelled_output(
+                        run_id,
+                        event_stream,
+                        tool_definitions,
+                        usage,
+                        finish_reason,
+                    ));
+                }
                 let tool_name = tool_request.name;
                 let tool_args = tool_request.args;
                 let reason = extract_reason_from_args(&tool_args);
@@ -175,9 +261,27 @@ impl AgentRuntime {
                     run_id: run_id.clone(),
                     call: call.clone(),
                 });
+                if cancellation_token.is_cancelled() {
+                    return Ok(cancelled_output(
+                        run_id,
+                        event_stream,
+                        tool_definitions,
+                        usage,
+                        finish_reason,
+                    ));
+                }
 
                 if requires_approval {
                     let action = tool_registry.proposed_action(&call)?;
+                    if cancellation_token.is_cancelled() {
+                        return Ok(cancelled_output(
+                            run_id,
+                            event_stream,
+                            tool_definitions,
+                            usage,
+                            finish_reason,
+                        ));
+                    }
                     if let AgentProposedAction::Diff { diff } = &action {
                         event_stream.emit(AgentEvent::Diff {
                             run_id: run_id.clone(),
@@ -221,12 +325,37 @@ impl AgentRuntime {
                     });
                 }
 
-                let result = execute_tool_on_blocking_thread(
+                let result = match execute_tool_on_blocking_thread(
                     tool_registry.clone(),
                     tool_context.clone(),
                     call.clone(),
+                    cancellation_token.clone(),
                 )
-                .await?;
+                .await
+                {
+                    Ok(result) => result,
+                    Err(error) if error.is_cancelled() => {
+                        return Ok(cancelled_output(
+                            run_id,
+                            event_stream,
+                            tool_definitions,
+                            usage,
+                            finish_reason,
+                        ));
+                    }
+                    Err(error) => return Err(error),
+                };
+                if cancellation_token.is_cancelled()
+                    || result.error.as_deref() == Some("agent run 已取消。")
+                {
+                    return Ok(cancelled_output(
+                        run_id,
+                        event_stream,
+                        tool_definitions,
+                        usage,
+                        finish_reason,
+                    ));
+                }
                 let event_result = redact_tool_result_for_event(&result);
                 event_stream.emit(AgentEvent::ToolResult {
                     run_id: run_id.clone(),
@@ -241,9 +370,27 @@ impl AgentRuntime {
                 if let Some(image_message) = llm_image_message_from_tool_result(&result) {
                     messages.push(image_message);
                 }
+                if cancellation_token.is_cancelled() {
+                    return Ok(cancelled_output(
+                        run_id,
+                        event_stream,
+                        tool_definitions,
+                        usage,
+                        finish_reason,
+                    ));
+                }
             }
         }
 
+        if cancellation_token.is_cancelled() {
+            return Ok(cancelled_output(
+                run_id,
+                event_stream,
+                tool_definitions,
+                usage,
+                finish_reason,
+            ));
+        }
         let content = final_content.unwrap_or_else(|| "没有生成可显示的回复。".to_string());
         if !llm_request.stream {
             event_stream.emit(AgentEvent::MessageDelta {
@@ -898,10 +1045,15 @@ async fn execute_tool_on_blocking_thread(
     registry: Arc<ToolRegistry>,
     context: ToolExecutionContext,
     call: AgentToolCall,
+    cancellation_token: AgentCancellationToken,
 ) -> AgentResult<AgentToolResult> {
-    tokio::task::spawn_blocking(move || registry.execute(&context, &call))
-        .await
-        .map_err(|error| AgentError::new(format!("工具执行线程失败：{error}")))
+    let handle = tokio::task::spawn_blocking(move || registry.execute(&context, &call));
+    tokio::select! {
+        _ = cancellation_token.cancelled() => Err(AgentError::cancelled()),
+        result = handle => {
+            result.map_err(|error| AgentError::new(format!("工具执行线程失败：{error}")))
+        }
+    }
 }
 
 fn redact_tool_result_for_event(result: &AgentToolResult) -> AgentToolResult {
@@ -1115,6 +1267,36 @@ fn done_event(
         usage,
         finish_reason,
         proposed_actions,
+    }
+}
+
+fn cancelled_output(
+    run_id: String,
+    mut event_stream: AgentEventStream,
+    tool_definitions: Vec<AgentToolDefinition>,
+    usage: Option<AgentUsage>,
+    finish_reason: Option<String>,
+) -> AgentChatOutput {
+    event_stream.emit(state_event(&run_id, AgentRunStatus::Cancelled, None, None));
+    event_stream.emit(done_event(
+        &run_id,
+        false,
+        AgentRunStatus::Cancelled,
+        None,
+        usage.clone(),
+        finish_reason.clone(),
+        Vec::new(),
+    ));
+
+    AgentChatOutput {
+        content: String::new(),
+        status: AgentRunStatus::Cancelled,
+        run_id,
+        events: event_stream.into_events(),
+        tool_definitions,
+        usage,
+        finish_reason,
+        proposed_actions: Vec::new(),
     }
 }
 

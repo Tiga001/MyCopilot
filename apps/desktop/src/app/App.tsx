@@ -8,6 +8,7 @@ import { useProjectSettings } from "../config/ProjectSettingsProvider";
 import {
   approveAgentAction,
   cancelAgentAction,
+  cancelAgentRun,
   rejectAgentAction,
   startConversationTurn,
 } from "../features/agent/agentClient";
@@ -21,6 +22,8 @@ import type {
   ChatMessageUiState,
   ChatSubmitOptions,
 } from "../features/chat/chatTypes";
+import { cancelPendingReadActivities } from "../features/chat/agentReadActivities";
+import { cancelPendingWebSearchActivities } from "../features/chat/agentWebSearch";
 import {
   deleteStoredComposerDraft,
   deleteStoredConversation,
@@ -158,6 +161,7 @@ function getImmediateAgentRunSignature(message: ChatMessage) {
     toolCalls: run.toolCalls,
     toolResults: run.toolResults,
     webSearchActivities: run.webSearchActivities ?? [],
+    readActivities: run.readActivities ?? [],
     approvals: run.approvals,
     diffs: run.diffs,
     commandOutputs: run.commandOutputs,
@@ -766,6 +770,12 @@ export function App() {
     bufferedAgentEventsRef.current.delete(runId);
   }, []);
 
+  const cancelBackendAgentRun = useCallback((runId: string) => {
+    void cancelAgentRun(runId).catch((error) => {
+      console.error("Failed to cancel agent run", error);
+    });
+  }, []);
+
   const startNewConversation = useCallback((projectId: string | null = null) => {
     setNewConversationProjectId(projectId);
     setComposerDrafts((currentDrafts) => ({
@@ -913,6 +923,7 @@ export function App() {
 
       if (isDisposed) return;
       if (!agentEvent.runId) return;
+      if (cancelledRunIdsRef.current.has(agentEvent.runId)) return;
 
       const binding = activeRunBindingsRef.current.get(agentEvent.runId);
       if (!binding) {
@@ -977,6 +988,9 @@ export function App() {
 
         if (cancelledPendingMessageIdsRef.current.has(pendingMessageId)) {
           cancelledPendingMessageIdsRef.current.delete(pendingMessageId);
+          cancelledRunIdsRef.current.add(startOutput.runId);
+          cancelBackendAgentRun(startOutput.runId);
+          bufferedAgentEventsRef.current.delete(startOutput.runId);
           return;
         }
 
@@ -1065,7 +1079,7 @@ export function App() {
         );
       }
     },
-    [handleAgentEvent, updateAssistantMessage],
+    [cancelBackendAgentRun, handleAgentEvent, updateAssistantMessage],
   );
 
   const createConversationFromMessage = useCallback(
@@ -1430,6 +1444,7 @@ export function App() {
 
   const stopActiveGeneration = useCallback(() => {
     if (!activeConversationId) return;
+    const stoppedAt = Date.now();
 
     const activeConversationSnapshot = conversations.find((conversation) => conversation.id === activeConversationId);
     const pendingMessage = [...(activeConversationSnapshot?.messages ?? [])]
@@ -1442,6 +1457,7 @@ export function App() {
 
     if (pendingMessage.agentRun?.runId) {
       cancelledRunIdsRef.current.add(pendingMessage.agentRun.runId);
+      cancelBackendAgentRun(pendingMessage.agentRun.runId);
       cleanupRunBinding(pendingMessage.agentRun.runId);
     }
 
@@ -1452,25 +1468,38 @@ export function App() {
               ...conversation,
               messages: conversation.messages.map((message) =>
                 message.id === pendingMessage.id
-                  ? {
-                      ...message,
-                      content: message.content && message.content !== THINKING_PLACEHOLDER ? message.content : "已停止生成。",
-                      status: "sent",
-                      agentRun: message.agentRun
-                        ? {
-                            ...message.agentRun,
-                            status: "cancelled",
-                          }
-                        : message.agentRun,
-                    }
+                  ? (() => {
+                      const currentRun = ensureAgentRun(
+                        message.agentRun,
+                        pendingMessage.agentRun?.runId ?? null,
+                        "cancelled",
+                      );
+                      const startedAt = message.agentRun?.startedAt ?? message.createdAt;
+                      const visibleContent =
+                        message.content && message.content !== THINKING_PLACEHOLDER ? message.content : "";
+
+                      return {
+                        ...message,
+                        content: visibleContent,
+                        status: "sent",
+                        agentRun: {
+                          ...currentRun,
+                          status: "cancelled",
+                          startedAt,
+                          completedAt: stoppedAt,
+                          webSearchActivities: cancelPendingWebSearchActivities(currentRun, stoppedAt),
+                          readActivities: cancelPendingReadActivities(currentRun, stoppedAt),
+                        },
+                      };
+                    })()
                   : message,
               ),
-              updatedAt: Date.now(),
+              updatedAt: stoppedAt,
             }
           : conversation,
       ),
     );
-  }, [activeConversationId, cleanupRunBinding, conversations]);
+  }, [activeConversationId, cancelBackendAgentRun, cleanupRunBinding, conversations]);
 
   const handleApproveAgentAction = useCallback(
     async (messageId: string, action: AgentProposedAction) => {

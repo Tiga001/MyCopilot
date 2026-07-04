@@ -15,13 +15,36 @@ pub fn run() {
             std::fs::create_dir_all(&app_data_dir)?;
             let database_path = app_data_dir.join("mycopilot.sqlite3");
             let storage = storage::StorageState::open(&database_path)?;
+            let attachment_root = app_data_dir.join("attachments");
+            {
+                let connection = storage
+                    .connection()
+                    .map_err(|error| std::io::Error::new(std::io::ErrorKind::Other, error))?;
+                match storage::commands::run_orphan_attachment_cleanup_once(
+                    &connection,
+                    &attachment_root,
+                ) {
+                    Ok(Some(summary)) if summary.files_removed > 0 => {
+                        eprintln!(
+                            "Cleaned up {} orphan attachment files ({} bytes).",
+                            summary.files_removed, summary.bytes_removed
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        eprintln!("Failed to clean up orphan attachment files: {error}");
+                    }
+                }
+            }
             app.manage(storage);
             app.manage(agent_actions::AgentActionState::default());
+            app.manage(commands::agent::AgentRunCancellationState::default());
             app.manage(process::command_runner::CommandRunState::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::agent::agent_start_conversation_turn,
+            commands::agent::agent_cancel_run,
             commands::agent_attachments::select_agent_input_attachments,
             commands::agent_actions::agent_list_pending_actions,
             commands::agent_actions::agent_approve_action,

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ExternalLink } from "lucide-react";
+import { useFrontendConfig } from "../../../../config/FrontendConfigProvider";
 import type { ChatWebSearchSource } from "../../chatTypes";
 import { compareWebSearchSourcesByRelevance } from "../../agentWebSearch";
 import { openExternalUrl } from "../../../../lib/externalLinks";
@@ -43,8 +43,10 @@ export function WebSearchSourcesList({
   mode?: "compact" | "rich";
   sources: ChatWebSearchSource[];
 }) {
+  const { t } = useFrontendConfig();
+
   if (sources.length === 0) {
-    return <p className="web-search-activity__empty">没有返回可打开的网页来源。</p>;
+    return <p className="web-search-activity__empty">{t("agent.web.noSources")}</p>;
   }
 
   const orderedSources = [...sources].sort(compareWebSearchSourcesByRelevance);
@@ -73,7 +75,6 @@ export function WebSearchSourcesList({
               </>
             )}
           </span>
-          <ExternalLink aria-hidden="true" />
         </button>
       ))}
     </div>
@@ -81,6 +82,7 @@ export function WebSearchSourcesList({
 }
 
 export function AssistantSources({ sources }: { sources: ChatWebSearchSource[] }) {
+  const { t } = useFrontendConfig();
   const [isOpen, setOpen] = useState(false);
   const popoverRef = useRef<HTMLDivElement>(null);
 
@@ -122,11 +124,11 @@ export function AssistantSources({ sources }: { sources: ChatWebSearchSource[] }
             <SourceBadge key={source.id} source={source} />
           ))}
         </span>
-        <span>来源</span>
+        <span>{t("agent.web.sources")}</span>
       </button>
       {isOpen && (
-        <div className="assistant-sources__popover" role="dialog" aria-label="网页来源">
-          <strong>来源</strong>
+        <div className="assistant-sources__popover" role="dialog" aria-label={t("agent.web.sourcesAria")}>
+          <strong>{t("agent.web.sources")}</strong>
           <WebSearchSourcesList sources={sources} />
         </div>
       )}

@@ -108,6 +108,54 @@ pub fn list_project_attachments(
     attachments
 }
 
+pub fn list_project_deletion_attachments(
+    connection: &Connection,
+    project_id: &str,
+) -> rusqlite::Result<Vec<AttachmentRecord>> {
+    let mut statement = connection.prepare(
+        "
+        SELECT
+            id,
+            conversation_id,
+            message_id,
+            project_id,
+            kind,
+            original_name,
+            mime_type,
+            size_bytes,
+            storage_rel_path,
+            created_at
+        FROM attachments
+        WHERE project_id = ?1
+            OR conversation_id IN (
+                SELECT id
+                FROM conversations
+                WHERE project_id = ?1
+            )
+        ORDER BY created_at ASC, id ASC
+        ",
+    )?;
+
+    let attachments = statement
+        .query_map(params![project_id], attachment_from_row)?
+        .collect();
+
+    attachments
+}
+
+pub fn list_attachment_storage_rel_paths(connection: &Connection) -> rusqlite::Result<Vec<String>> {
+    let mut statement = connection.prepare(
+        "
+        SELECT storage_rel_path
+        FROM attachments
+        ",
+    )?;
+
+    let paths = statement.query_map([], |row| row.get(0))?.collect();
+
+    paths
+}
+
 fn attachment_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AttachmentRecord> {
     Ok(AttachmentRecord {
         id: row.get(0)?,

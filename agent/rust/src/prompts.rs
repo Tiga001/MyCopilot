@@ -89,6 +89,7 @@ fn tool_policy_section() -> String {
     - 如果需要调用工具，必须使用模型 API 的原生 tool/function calling，不要手写 JSON tool_call 文本。\n\
     - 工具返回后你会收到 tool result observation，然后再继续推理并给出最终回答。\n\
     - workspace 文件不会自动进入上下文；需要具体文件内容时，必须先用工具读取。\n\
+    - 当用户询问项目结构、架构、目录概览、技术栈或入口文件时，优先调用 workspace_map 获取全局概览，再按需使用 read_file、search_files 或 search_code 深入查看。\n\
     - 附件历史不会自动展开；需要查看历史附件时，先列出附件，再用返回的 readPath 调用合适的读取工具。"
         .to_string()
 }

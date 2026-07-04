@@ -10,7 +10,8 @@ import type {
   ChatMessageAttachment,
   ChatMessageUiState,
 } from "../chat/chatTypes";
-import { normalizeWebSearchActivities } from "../chat/agentWebSearch";
+import { cancelPendingReadActivities, normalizeReadActivities } from "../chat/agentReadActivities";
+import { cancelPendingWebSearchActivities, normalizeWebSearchActivities } from "../chat/agentWebSearch";
 
 interface PersistedModelConfig {
   id: string;
@@ -399,6 +400,7 @@ function normalizePersistedAgentRun(agentRun: ChatAgentRunView): ChatAgentRunVie
   const agentRunWithToolDetails: ChatAgentRunView = {
     ...agentRun,
     webSearchActivities: normalizeWebSearchActivities(agentRun),
+    readActivities: normalizeReadActivities(agentRun),
   };
   const hasCompletedAt = Boolean(agentRun.completedAt);
   const isActive =
@@ -415,6 +417,8 @@ function normalizePersistedAgentRun(agentRun: ChatAgentRunView): ChatAgentRunVie
     ...agentRunWithToolDetails,
     status: "cancelled",
     completedAt: interruptedAt,
+    webSearchActivities: cancelPendingWebSearchActivities(agentRunWithToolDetails, interruptedAt),
+    readActivities: cancelPendingReadActivities(agentRunWithToolDetails, interruptedAt),
     error: agentRun.error ?? "应用关闭后，该次处理已中断。",
   };
 }

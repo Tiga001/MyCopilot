@@ -1,6 +1,6 @@
 use super::{
-    relative_display, sanitize_limit, walk_workspace, AgentTool, ToolExecutionContext, WalkEntry,
-    WalkResult, MAX_SEARCH_FILE_BYTES, MAX_SEARCH_LIMIT,
+    relative_display, sanitize_limit, walk_workspace_with_cancellation, AgentTool,
+    ToolExecutionContext, WalkEntry, WalkResult, MAX_SEARCH_FILE_BYTES, MAX_SEARCH_LIMIT,
 };
 use crate::protocol::{AgentError, AgentResult, AgentToolDefinition, AgentToolSafety};
 use serde::Deserialize;
@@ -39,6 +39,7 @@ impl AgentTool for SearchCodeTool {
         }
 
         let root = context.workspace_root()?;
+        let cancellation_token = context.cancellation_token();
         let search_root = match args.path.as_deref().filter(|path| !path.trim().is_empty()) {
             Some(path) => context.resolve_existing_path(path)?,
             None => root.clone(),
@@ -63,10 +64,11 @@ impl AgentTool for SearchCodeTool {
                 truncated: false,
             }
         } else {
-            walk_workspace(&search_root)?
+            walk_workspace_with_cancellation(&search_root, &cancellation_token)?
         };
 
         for entry in walk.entries.iter().filter(|entry| !entry.is_dir) {
+            cancellation_token.check()?;
             if entry.size_bytes > MAX_SEARCH_FILE_BYTES {
                 continue;
             }
@@ -76,6 +78,9 @@ impl AgentTool for SearchCodeTool {
             };
 
             for (line_index, line) in content.lines().enumerate() {
+                if line_index % 200 == 0 {
+                    cancellation_token.check()?;
+                }
                 let haystack = if case_sensitive {
                     line.to_string()
                 } else {

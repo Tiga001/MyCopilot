@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   approveAgentActionWithInvoker,
   cancelAgentActionWithInvoker,
+  cancelAgentRunWithInvoker,
   listPendingAgentActionsWithInvoker,
   rejectAgentActionWithInvoker,
   startAgentConversationTurnWithInvoker,
@@ -39,4 +40,8 @@ export async function rejectAgentAction(
 
 export async function cancelAgentAction(actionId: string): Promise<boolean> {
   return cancelAgentActionWithInvoker(invoke, actionId);
+}
+
+export async function cancelAgentRun(runId: string): Promise<boolean> {
+  return cancelAgentRunWithInvoker(invoke, runId);
 }

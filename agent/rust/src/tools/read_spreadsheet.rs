@@ -34,14 +34,16 @@ impl AgentTool for ReadSpreadsheetTool {
     }
 
     fn execute(&self, context: &ToolExecutionContext, args: Value) -> AgentResult<Value> {
+        context.check_cancelled()?;
         let args: ReadSpreadsheetArgs = serde_json::from_value(args)
             .map_err(|error| AgentError::new(format!("read_spreadsheet 参数无效：{error}")))?;
         let path = args.path()?;
         let max_chars = sanitize_document_max_chars(args.max_chars);
         let resolved = resolve_document_path(context, path, &["xlsx", "xls", "csv", "tsv"])?;
+        let cancellation_token = context.cancellation_token();
         let (text, sheet_count, extractor) = match resolved.extension.as_str() {
             "xlsx" => {
-                let sheets = read_xlsx_sheets(&resolved.file_path)?;
+                let sheets = read_xlsx_sheets(&resolved.file_path, &cancellation_token)?;
                 let text = sheets
                     .iter()
                     .map(|sheet| format!("## {}\n{}", sheet.name, sheet.text))
@@ -49,14 +51,21 @@ impl AgentTool for ReadSpreadsheetTool {
                     .join("\n\n");
                 (text, sheets.len(), "ooxml")
             }
-            "xls" => (extract_with_textutil(&resolved.file_path)?, 1, "textutil"),
+            "xls" => (
+                extract_with_textutil(&resolved.file_path, &cancellation_token)?,
+                1,
+                "textutil",
+            ),
             "csv" | "tsv" => {
+                cancellation_token.check()?;
                 let text = fs::read_to_string(&resolved.file_path)
                     .map_err(|error| AgentError::new(format!("读取表格文本失败：{error}")))?;
+                cancellation_token.check()?;
                 (normalize_text_output(&text), 1, "utf8_text")
             }
             _ => unreachable!("extension validated before dispatch"),
         };
+        cancellation_token.check()?;
         let (text, truncated) = truncate_chars(&text, max_chars);
 
         Ok(json!({
@@ -90,15 +99,20 @@ impl ReadSpreadsheetArgs {
     }
 }
 
-fn read_xlsx_sheets(file_path: &std::path::Path) -> AgentResult<Vec<NamedText>> {
+fn read_xlsx_sheets(
+    file_path: &std::path::Path,
+    cancellation_token: &crate::cancellation::AgentCancellationToken,
+) -> AgentResult<Vec<NamedText>> {
+    cancellation_token.check()?;
     let file = File::open(file_path)
         .map_err(|error| AgentError::new(format!("打开 XLSX 文件失败：{error}")))?;
     let mut archive = zip::ZipArchive::new(file)
         .map_err(|error| AgentError::new(format!("读取 XLSX 压缩包失败：{error}")))?;
-    let shared_strings = read_shared_strings(&mut archive)?;
+    let shared_strings = read_shared_strings(&mut archive, cancellation_token)?;
     let mut sheets = Vec::new();
 
     for index in 0..archive.len() {
+        cancellation_token.check()?;
         let mut entry = archive
             .by_index(index)
             .map_err(|error| AgentError::new(format!("读取 XLSX 条目失败：{error}")))?;
@@ -111,12 +125,14 @@ fn read_xlsx_sheets(file_path: &std::path::Path) -> AgentResult<Vec<NamedText>> 
         entry
             .read_to_string(&mut xml)
             .map_err(|error| AgentError::new(format!("读取 sheet XML 失败：{error}")))?;
+        cancellation_token.check()?;
         let text = extract_sheet_text(&xml, &shared_strings)?;
         if !text.trim().is_empty() {
             sheets.push(NamedText { name, text });
         }
     }
 
+    cancellation_token.check()?;
     sheets.sort_by_key(|sheet| {
         sheet
             .name
@@ -129,7 +145,11 @@ fn read_xlsx_sheets(file_path: &std::path::Path) -> AgentResult<Vec<NamedText>> 
     Ok(sheets)
 }
 
-fn read_shared_strings(archive: &mut zip::ZipArchive<File>) -> AgentResult<Vec<String>> {
+fn read_shared_strings(
+    archive: &mut zip::ZipArchive<File>,
+    cancellation_token: &crate::cancellation::AgentCancellationToken,
+) -> AgentResult<Vec<String>> {
+    cancellation_token.check()?;
     let Ok(mut entry) = archive.by_name("xl/sharedStrings.xml") else {
         return Ok(Vec::new());
     };
@@ -138,6 +158,7 @@ fn read_shared_strings(archive: &mut zip::ZipArchive<File>) -> AgentResult<Vec<S
     entry
         .read_to_string(&mut xml)
         .map_err(|error| AgentError::new(format!("读取 sharedStrings.xml 失败：{error}")))?;
+    cancellation_token.check()?;
     let document = roxmltree::Document::parse(&xml)
         .map_err(|error| AgentError::new(format!("解析 sharedStrings.xml 失败：{error}")))?;
     let strings = document

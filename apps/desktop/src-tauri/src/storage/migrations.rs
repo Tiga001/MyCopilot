@@ -108,6 +108,11 @@ pub fn run_migrations(connection: &Connection) -> rusqlite::Result<()> {
             custom_instructions TEXT NOT NULL,
             updated_at INTEGER NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS maintenance_tasks (
+            id TEXT PRIMARY KEY,
+            completed_at INTEGER NOT NULL
+        );
         ",
     )?;
 

@@ -1,18 +1,32 @@
 import type { AgentToolCall, AgentToolResult } from "@agent";
-import type { ChatWebSearchActivity } from "../../chatTypes";
+import type { ChatReadActivity, ChatWebSearchActivity } from "../../chatTypes";
+import { isReadActivityTool } from "../../agentReadActivities";
 import { GenericToolActivity } from "./GenericToolActivity";
+import { ReadToolActivity } from "./ReadToolActivity";
 import { WebSearchToolActivity } from "./WebSearchToolActivity";
 
 interface AgentToolActivityProps {
-  activity?: ChatWebSearchActivity;
+  cancelled?: boolean;
+  readActivity?: ChatReadActivity;
+  webActivity?: ChatWebSearchActivity;
   call: AgentToolCall;
   result?: AgentToolResult;
 }
 
-export function AgentToolActivity({ activity, call, result }: AgentToolActivityProps) {
-  if (call.tool === "web_search") {
-    return <WebSearchToolActivity activity={activity} call={call} result={result} />;
+export function AgentToolActivity({
+  cancelled = false,
+  readActivity,
+  webActivity,
+  call,
+  result,
+}: AgentToolActivityProps) {
+  if (call.tool === "web_search" || call.tool === "web_fetch") {
+    return <WebSearchToolActivity activity={webActivity} call={call} result={result} />;
   }
 
-  return <GenericToolActivity call={call} result={result} />;
+  if (isReadActivityTool(call.tool)) {
+    return <ReadToolActivity activity={readActivity} call={call} result={result} />;
+  }
+
+  return <GenericToolActivity cancelled={cancelled && !result} call={call} result={result} />;
 }

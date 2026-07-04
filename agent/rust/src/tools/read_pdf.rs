@@ -31,13 +31,16 @@ impl AgentTool for ReadPdfTool {
     }
 
     fn execute(&self, context: &ToolExecutionContext, args: Value) -> AgentResult<Value> {
+        context.check_cancelled()?;
         let args: ReadPdfArgs = serde_json::from_value(args)
             .map_err(|error| AgentError::new(format!("read_pdf 参数无效：{error}")))?;
         let path = args.path()?;
         let max_chars = sanitize_document_max_chars(args.max_chars);
         let resolved = resolve_document_path(context, path, &["pdf"])?;
+        context.check_cancelled()?;
         let pages = pdf_extract::extract_text_by_pages(&resolved.file_path)
             .map_err(|error| AgentError::new(format!("提取 PDF 文本失败：{error}")))?;
+        context.check_cancelled()?;
         let text = pages
             .iter()
             .enumerate()

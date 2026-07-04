@@ -416,6 +416,7 @@
 
 .chat-markdown a {
   color: var(--mc-color-text-accent);
+  cursor: pointer;
   text-decoration: none;
 }
 
@@ -669,7 +670,12 @@
   font-weight: var(--mc-font-weight-strong);
 }
 
-.agent-activity summary {
+.agent-run > .agent-activity + .agent-activity {
+  margin-top: -10px;
+}
+
+.agent-activity summary,
+.agent-activity__static-summary {
   display: inline-flex;
   align-items: center;
   max-width: 100%;
@@ -677,12 +683,20 @@
   gap: 10px;
   color: var(--mc-color-text-muted);
   list-style: none;
-  cursor: pointer;
   transition: color 120ms ease;
 }
 
+.agent-activity summary {
+  cursor: pointer;
+}
+
+.agent-activity__static-summary {
+  cursor: default;
+}
+
 .agent-activity summary:hover,
-.agent-activity summary:focus-visible {
+.agent-activity summary:focus-visible,
+.agent-activity__static-summary:hover {
   color: var(--mc-color-text-primary);
 }
 
@@ -691,6 +705,7 @@
 }
 
 .agent-activity summary > svg:first-child,
+.agent-activity__static-summary > svg:first-child,
 .agent-activity--error > svg {
   flex: 0 0 auto;
   width: var(--mc-icon-size-base);
@@ -699,7 +714,8 @@
   stroke-width: var(--mc-icon-stroke-medium);
 }
 
-.agent-activity summary span {
+.agent-activity summary span,
+.agent-activity__static-summary span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -710,14 +726,6 @@
   width: var(--mc-icon-size-sm);
   height: var(--mc-icon-size-sm);
   color: currentColor;
-  transition: transform 0.15s ease;
-}
-
-.agent-activity[open] .agent-activity__chevron {
-  transform: rotate(180deg);
-}
-
-.agent-activity--web-search .agent-activity__chevron {
   opacity: 0;
   transform: rotate(-90deg);
   transition:
@@ -725,13 +733,13 @@
     opacity 120ms ease;
 }
 
-.agent-activity--web-search summary:hover .agent-activity__chevron,
-.agent-activity--web-search summary:focus-visible .agent-activity__chevron,
-.agent-activity--web-search[open] .agent-activity__chevron {
+.agent-activity summary:hover .agent-activity__chevron,
+.agent-activity summary:focus-visible .agent-activity__chevron,
+.agent-activity[open] .agent-activity__chevron {
   opacity: 1;
 }
 
-.agent-activity--web-search[open] .agent-activity__chevron {
+.agent-activity[open] .agent-activity__chevron {
   transform: rotate(0deg);
 }
 
@@ -821,6 +829,65 @@
   font-size: var(--mc-font-size-chat-activity-detail);
 }
 
+.read-activity__details {
+  display: block;
+  max-width: min(100%, 420px);
+  padding-top: 8px;
+}
+
+.read-activity__image {
+  width: 92px;
+  height: 92px;
+  overflow: hidden;
+  background: var(--mc-color-surface-elevated);
+  border: 1px solid var(--mc-color-border-subtle);
+  border-radius: var(--mc-radius-xl);
+}
+
+.read-activity__image img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.read-activity__items {
+  display: grid;
+  max-width: min(100%, 720px);
+  max-height: 260px;
+  gap: 7px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.read-activity__items[data-kind="image"] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.read-activity__text-item {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--mc-color-text-muted);
+  font-size: var(--mc-font-size-chat-activity);
+  font-weight: var(--mc-font-weight-medium);
+  line-height: var(--mc-line-height-relaxed);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.read-activity__text-item[data-status="failed"] {
+  color: var(--mc-color-text-danger);
+}
+
+.read-activity__error {
+  margin: 0 0 8px;
+  color: var(--mc-color-text-danger);
+  font-size: var(--mc-font-size-chat-activity-detail);
+  font-weight: var(--mc-font-weight-medium);
+}
+
 .web-search-sources-list {
   display: grid;
   max-width: 100%;
@@ -829,7 +896,7 @@
 
 .web-search-source {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: start;
   width: 100%;
   padding: 4px 0;
@@ -845,14 +912,6 @@
 .web-search-source:hover,
 .web-search-source:focus-visible {
   color: var(--mc-color-text-primary);
-}
-
-.web-search-source > svg {
-  width: var(--mc-icon-size-sm);
-  height: var(--mc-icon-size-sm);
-  margin-top: 0.18em;
-  color: var(--mc-color-icon-subtle);
-  stroke-width: var(--mc-icon-stroke-medium);
 }
 
 .web-source-badge {

@@ -29,6 +29,7 @@ export type AgentToolName =
   | "read_word"
   | "read_presentation"
   | "read_spreadsheet"
+  | "workspace_map"
   | "search_files"
   | "search_code"
   | "web_search"

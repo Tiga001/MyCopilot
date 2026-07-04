@@ -7,12 +7,19 @@ import {
   PencilLine,
   SquareTerminal,
 } from "lucide-react";
-import type { AgentProposedAction } from "@agent";
+import type { AgentProposedAction, AgentToolCall } from "@agent";
+import { useFrontendConfig } from "../../../config/FrontendConfigProvider";
+import { formatTranslation, type Translate } from "../../../config/translationFormat";
 import type {
   ChatAgentRunView,
   ChatAgentTimelineItem,
   ChatMessage,
+  ChatReadActivityKind,
 } from "../chatTypes";
+import {
+  getReadActivityKindForTool,
+  isReadActivityTool,
+} from "../agentReadActivities";
 import { getUniqueWebSearchSources } from "../agentWebSearch";
 import {
   getAttachmentBadgeLabel,
@@ -21,7 +28,12 @@ import {
   getAttachmentPreviewUrl,
 } from "../attachmentDisplay";
 import { ChatMarkdown } from "./ChatMarkdown";
+import { AgentActivityDisclosure } from "./toolActivities/AgentActivityDisclosure";
 import { AgentToolActivity } from "./toolActivities/AgentToolActivity";
+import {
+  ReadToolActivityGroup,
+  type ReadToolActivityGroupItem,
+} from "./toolActivities/ReadToolActivity";
 import { AssistantSources } from "./toolActivities/WebSearchSources";
 import { formatToolDetails, getToolDisplayName } from "./toolActivities/toolActivityUtils";
 
@@ -37,7 +49,16 @@ interface ChatMessageItemProps {
   onUiStateChange?: (messageId: string, uiState: ChatMessage["uiState"]) => void;
 }
 
-function formatMessageTime(timestamp: number | undefined) {
+type RenderableTimelineItem =
+  | ChatAgentTimelineItem
+  | {
+      id: string;
+      type: "read_group";
+      kind: ChatReadActivityKind;
+      callIds: string[];
+    };
+
+function formatMessageTime(timestamp: number | undefined, language: string, t: Translate) {
   if (!timestamp) return "";
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) return "";
@@ -51,9 +72,9 @@ function formatMessageTime(timestamp: number | undefined) {
 
   const dayDistance = Math.floor((today.getTime() - messageDay.getTime()) / 86_400_000);
   if (dayDistance <= 0) return time;
-  if (dayDistance === 1) return `昨天 ${time}`;
+  if (dayDistance === 1) return `${t("chat.yesterday")} ${time}`;
   if (dayDistance <= 7) {
-    return `${new Intl.DateTimeFormat("zh-CN", { weekday: "long" }).format(date)} ${time}`;
+    return `${new Intl.DateTimeFormat(language, { weekday: "long" }).format(date)} ${time}`;
   }
 
   return `${date.getMonth() + 1}月${date.getDate()}日 ${time}`;
@@ -217,10 +238,74 @@ function hasCollapsibleTimelineContent(run: ChatAgentRunView, timeline: ChatAgen
   return timeline.some((item) => item.type !== "message" && isTimelineItemRenderable(run, item));
 }
 
+function getReadKindForCall(run: ChatAgentRunView, call: AgentToolCall) {
+  if (!isReadActivityTool(call.tool)) return undefined;
+  return run.readActivities?.find((activity) => activity.callId === call.id)?.kind
+    ?? getReadActivityKindForTool(call.tool);
+}
+
+function groupReadTimelineItems(
+  run: ChatAgentRunView,
+  timeline: ChatAgentTimelineItem[],
+): RenderableTimelineItem[] {
+  return timeline.reduce<RenderableTimelineItem[]>((items, item) => {
+    if (item.type !== "tool_call") return [...items, item];
+
+    const call = run.toolCalls.find((candidate) => candidate.id === item.callId);
+    const kind = call ? getReadKindForCall(run, call) : undefined;
+    if (!kind) return [...items, item];
+
+    const previousItem = items[items.length - 1];
+    if (previousItem?.type === "read_group" && previousItem.kind === kind) {
+      return [
+        ...items.slice(0, -1),
+        {
+          ...previousItem,
+          callIds: [...previousItem.callIds, item.callId],
+        },
+      ];
+    }
+
+    return [
+      ...items,
+      {
+        id: `read-group-${item.callId}`,
+        type: "read_group",
+        kind,
+        callIds: [item.callId],
+      },
+    ];
+  }, []);
+}
+
+function getReadGroupItems(
+  run: ChatAgentRunView,
+  callIds: string[],
+): ReadToolActivityGroupItem[] {
+  return callIds.reduce<ReadToolActivityGroupItem[]>((items, callId) => {
+    const call = run.toolCalls.find((candidate) => candidate.id === callId);
+    if (!call) return items;
+
+    return [
+      ...items,
+      {
+        activity: run.readActivities?.find((activity) => activity.callId === call.id),
+        call,
+        result: getToolResult(run, call.id),
+      },
+    ];
+  }, []);
+}
+
 function shouldShowAssistantActions(message: ChatMessage) {
   if (message.role !== "assistant" || message.status !== "sent") return false;
   if (!getAssistantFinalContent(message).trim()) return false;
-  return !message.agentRun || message.agentRun.status === "completed" || message.agentRun.status === "idle";
+  return (
+    !message.agentRun ||
+    message.agentRun.status === "completed" ||
+    message.agentRun.status === "idle" ||
+    message.agentRun.status === "cancelled"
+  );
 }
 
 function formatElapsedDuration(milliseconds: number) {
@@ -285,8 +370,9 @@ function AgentRunElapsedHeader({
 }
 
 function ChatMessageActions({ content, timestamp }: { content: string; timestamp: number | undefined }) {
+  const { language, t } = useFrontendConfig();
   const [copied, setCopied] = useState(false);
-  const timeLabel = formatMessageTime(timestamp);
+  const timeLabel = formatMessageTime(timestamp, language, t);
   const canCopy = Boolean(content.trim());
   const Icon = copied ? Check : Copy;
 
@@ -327,31 +413,41 @@ function ChatMessageActions({ content, timestamp }: { content: string; timestamp
 }
 
 function AgentDiffActivity({ run, diffId }: { run: ChatAgentRunView; diffId: string }) {
+  const { t } = useFrontendConfig();
   const diff = run.diffs.find((candidate) => candidate.id === diffId);
   if (!diff) return null;
   const isPending = isPendingApprovalStatus(diff.approvalStatus);
 
   return (
-    <details className="agent-activity agent-activity--diff">
-      <summary>
-        <PencilLine aria-hidden="true" />
-        <span className={isPending ? "agent-running-text" : undefined}>
-          {diff.approvalStatus === "approved" ? "已编辑" : "正在编辑"} {diff.filePath}
-        </span>
-        <ChevronDown className="agent-activity__chevron" aria-hidden="true" />
-      </summary>
+    <AgentActivityDisclosure
+      className="agent-activity--diff"
+      hasDetails
+      icon={PencilLine}
+      isPending={isPending}
+      label={formatTranslation(
+        t,
+        diff.approvalStatus === "approved" ? "agent.diff.edited" : "agent.diff.editing",
+        { filePath: diff.filePath },
+      )}
+    >
       <div className="agent-activity__details">
         {diff.summary && <p>{diff.summary}</p>}
         <pre>{diff.patch}</pre>
       </div>
-    </details>
+    </AgentActivityDisclosure>
   );
 }
 
-function getApprovalTitle(action: AgentProposedAction) {
-  if (action.type === "diff") return `需要审批编辑 ${action.diff.filePath}`;
-  if (action.type === "command") return `需要审批命令：${action.command.command}`;
-  return `需要审批工具：${getToolDisplayName(action.call.tool)}`;
+function getApprovalTitle(action: AgentProposedAction, t: Translate) {
+  if (action.type === "diff") {
+    return formatTranslation(t, "agent.approval.diff", { filePath: action.diff.filePath });
+  }
+  if (action.type === "command") {
+    return formatTranslation(t, "agent.approval.command", { command: action.command.command });
+  }
+  return formatTranslation(t, "agent.approval.tool", {
+    tool: getToolDisplayName(action.call.tool, t),
+  });
 }
 
 function getApprovalDetails(action: AgentProposedAction) {
@@ -373,24 +469,26 @@ function AgentApprovalActivity({
   onCancel?: (messageId: string, action: AgentProposedAction) => void;
   onReject?: (messageId: string, action: AgentProposedAction) => void;
 }) {
+  const { t } = useFrontendConfig();
+
   return (
     <div className="agent-approval-card">
       <div className="agent-approval-card__body">
         <AlertTriangle aria-hidden="true" />
         <div>
-          <strong>{getApprovalTitle(action)}</strong>
+          <strong>{getApprovalTitle(action, t)}</strong>
           {getApprovalDetails(action) && <p>{getApprovalDetails(action)}</p>}
         </div>
       </div>
       <div className="agent-approval-card__actions">
         <button type="button" onClick={() => onReject?.(messageId, action)}>
-          拒绝
+          {t("agent.approval.reject")}
         </button>
         <button type="button" onClick={() => onCancel?.(messageId, action)}>
-          取消
+          {t("agent.approval.cancel")}
         </button>
         <button type="button" data-variant="primary" onClick={() => onApprove?.(messageId, action)}>
-          批准
+          {t("agent.approval.approve")}
         </button>
       </div>
     </div>
@@ -398,29 +496,33 @@ function AgentApprovalActivity({
 }
 
 function AgentCommandOutputActivity({ run, outputId }: { run: ChatAgentRunView; outputId: string }) {
+  const { t } = useFrontendConfig();
   const output = run.commandOutputs.find((candidate) => candidate.id === outputId);
   if (!output) return null;
 
   return (
-    <details className="agent-activity">
-      <summary>
-        <SquareTerminal aria-hidden="true" />
-        <span>
-          {output.stream === "stderr" ? "命令错误" : "命令输出"}：{output.command}
-        </span>
-        <ChevronDown className="agent-activity__chevron" aria-hidden="true" />
-      </summary>
+    <AgentActivityDisclosure
+      hasDetails
+      icon={SquareTerminal}
+      label={formatTranslation(
+        t,
+        output.stream === "stderr" ? "agent.command.error" : "agent.command.output",
+        { command: output.command },
+      )}
+    >
       <div className="agent-activity__details">
         <pre>{output.output}</pre>
       </div>
-    </details>
+    </AgentActivityDisclosure>
   );
 }
 
 function AgentThinkingActivity() {
+  const { t } = useFrontendConfig();
+
   return (
     <div className="agent-thinking">
-      <span className="agent-running-text">正在思考</span>
+      <span className="agent-running-text">{t("agent.thinking")}</span>
     </div>
   );
 }
@@ -433,13 +535,19 @@ function AgentTimelineItemView({
   onReject,
   run,
 }: {
-  item: ChatAgentTimelineItem;
+  item: RenderableTimelineItem;
   message: ChatMessage;
   onApprove?: (messageId: string, action: AgentProposedAction) => void;
   onCancel?: (messageId: string, action: AgentProposedAction) => void;
   onReject?: (messageId: string, action: AgentProposedAction) => void;
   run: ChatAgentRunView;
 }) {
+  if (item.type === "read_group") {
+    const items = getReadGroupItems(run, item.callIds);
+    if (items.length === 0) return null;
+    return <ReadToolActivityGroup items={items} />;
+  }
+
   if (item.type === "message") {
     if (!item.content.trim()) return null;
     return <ChatMarkdown className="chat-agent-text" content={item.content} />;
@@ -448,8 +556,18 @@ function AgentTimelineItemView({
   if (item.type === "tool_call") {
     const call = run.toolCalls.find((candidate) => candidate.id === item.callId);
     if (!call) return null;
-    const activity = run.webSearchActivities?.find((candidate) => candidate.callId === call.id);
-    return <AgentToolActivity activity={activity} call={call} result={getToolResult(run, call.id)} />;
+    const webActivity = run.webSearchActivities?.find((candidate) => candidate.callId === call.id);
+    const readActivity = run.readActivities?.find((candidate) => candidate.callId === call.id);
+    const result = getToolResult(run, call.id);
+    return (
+      <AgentToolActivity
+        cancelled={run.status === "cancelled" && !result}
+        call={call}
+        readActivity={readActivity}
+        result={result}
+        webActivity={webActivity}
+      />
+    );
   }
 
   if (item.type === "diff") {
@@ -496,6 +614,7 @@ function AgentRunView({
   onReject?: (messageId: string, action: AgentProposedAction) => void;
   onUiStateChange?: (messageId: string, uiState: ChatMessage["uiState"]) => void;
 }) {
+  const { t } = useFrontendConfig();
   const run = message.agentRun;
   const timeline = run?.timeline ?? [];
   const hasTimeline = timeline.length > 0;
@@ -517,21 +636,33 @@ function AgentRunView({
 
   const headerState = useMemo(() => {
     const hasFirstResponse = Boolean(run?.firstResponseAt);
+    const hasVisibleToolStatus = Boolean(run && hasCollapsibleTimelineContent(run, timeline));
 
-    if (run && !hasFirstResponse && !isRunSettled(run)) {
+    if (run && !hasFirstResponse && !hasVisibleToolStatus && !isRunSettled(run)) {
       return {
         isThinking: true,
-        label: "正在思考",
+        label: t("agent.thinking"),
       };
     }
 
-    const startedAt = run?.firstResponseAt ?? run?.startedAt ?? message.createdAt;
+    const startedAt = run?.startedAt ?? message.createdAt;
     const endedAt = run?.completedAt ?? now;
+    if (run?.status === "cancelled") {
+      return {
+        isThinking: false,
+        label: formatTranslation(t, "agent.stoppedAfter", {
+          duration: formatElapsedDuration(endedAt - startedAt),
+        }),
+      };
+    }
+
     return {
       isThinking: false,
-      label: `已处理 ${formatElapsedDuration(endedAt - startedAt)}`,
+      label: formatTranslation(t, "agent.processed", {
+        duration: formatElapsedDuration(endedAt - startedAt),
+      }),
     };
-  }, [message.createdAt, now, run]);
+  }, [message.createdAt, now, run, t]);
 
   if (!run) {
     return hasDisplayableContent(message.content) ? (
@@ -555,6 +686,10 @@ function AgentRunView({
     shouldShowThinkingActivity(run, timeline);
   const showTokenLimitNotice = isRunSettled(run) && isTokenLimitFinishReason(run.finishReason);
   const webSearchSources = getUniqueWebSearchSources(run);
+  const displayTimeline = useMemo(
+    () => groupReadTimelineItems(run, timeline),
+    [run, timeline],
+  );
 
   return (
     <div className="agent-run">
@@ -571,7 +706,7 @@ function AgentRunView({
         }
       />
       {showTimeline &&
-        timeline.map((item) => (
+        displayTimeline.map((item) => (
           <AgentTimelineItemView
             item={item}
             key={item.id}
@@ -589,7 +724,7 @@ function AgentRunView({
       {showTokenLimitNotice && (
         <div className="agent-run__notice" role="status">
           <AlertTriangle aria-hidden="true" />
-          <span>输出可能已达到模型 token 上限而被截断，可以发送“继续”让模型接着写。</span>
+          <span>{t("agent.tokenLimitNotice")}</span>
         </div>
       )}
       {showThinkingActivity && <AgentThinkingActivity />}
