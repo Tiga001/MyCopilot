@@ -329,6 +329,10 @@
   color: var(--mc-color-icon-danger);
 }
 
+.composer-permission-button[data-permission="custom"] {
+  color: var(--mc-color-text-accent);
+}
+
 .composer-model-button {
   color: var(--mc-color-text-primary);
 }
@@ -619,6 +623,10 @@
 
 .composer-permission-option[data-permission="full"] {
   color: var(--mc-color-icon-danger);
+}
+
+.composer-permission-option[data-permission="custom"] {
+  color: var(--mc-color-text-accent);
 }
 
 .composer-permission-option span {

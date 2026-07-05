@@ -170,6 +170,7 @@ mod tests {
                     root_path: Some(self.root.to_string_lossy().to_string()),
                 }),
                 attachment_library: None,
+                permissions: Default::default(),
             }))
         }
     }

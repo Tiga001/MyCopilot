@@ -62,8 +62,6 @@ export interface ChatReadActivity {
 export type ChatAgentTimelineItem =
   | { id: string; type: "message"; content: string }
   | { id: string; type: "tool_call"; callId: string }
-  | { id: string; type: "diff"; diffId: string }
-  | { id: string; type: "approval"; actionId: string }
   | { id: string; type: "error"; message: string };
 
 export interface ChatAgentRunView {
@@ -115,7 +113,7 @@ export interface ChatMessage {
   uiState?: ChatMessageUiState;
 }
 
-export type ChatPermissionMode = "default" | "full";
+export type ChatPermissionMode = "default" | "full" | "custom";
 
 export interface ChatComposerDraft {
   message: string;

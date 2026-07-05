@@ -11,6 +11,7 @@ import {
   Plus,
   Search,
   ShieldAlert,
+  ShieldCheck,
   ShieldPlus,
   X,
 } from "lucide-react";
@@ -46,6 +47,7 @@ interface PermissionOption {
 const PERMISSION_OPTIONS: PermissionOption[] = [
   { id: "default", labelKey: "chat.defaultPermission", icon: ShieldPlus },
   { id: "full", labelKey: "chat.fullPermission", icon: ShieldAlert },
+  { id: "custom", labelKey: "chat.customPermission", icon: ShieldCheck },
 ];
 
 const TEXTAREA_MAX_HEIGHT = 220;

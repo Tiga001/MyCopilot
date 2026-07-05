@@ -1,5 +1,5 @@
+mod apply_patch;
 mod attachments;
-mod generate_patch;
 mod git_diff;
 mod read_file;
 mod read_image;
@@ -17,12 +17,12 @@ mod workspace_map;
 
 use crate::cancellation::AgentCancellationToken;
 use crate::protocol::{
-    AgentAttachmentLibraryContext, AgentAttachmentReference, AgentError, AgentProposedAction,
-    AgentResult, AgentRunContext, AgentSearchConfig, AgentSearchMode, AgentToolCall,
-    AgentToolDefinition, AgentToolResult,
+    AgentAttachmentLibraryContext, AgentAttachmentReference, AgentError, AgentPermissions,
+    AgentProposedAction, AgentReadPermission, AgentResult, AgentRunContext, AgentSearchConfig,
+    AgentSearchMode, AgentToolCall, AgentToolDefinition, AgentToolResult,
 };
+use apply_patch::ApplyPatchTool;
 use attachments::{AttachmentsListProjectTool, AttachmentsListTool};
-use generate_patch::{ApplyPatchTool, GeneratePatchTool};
 use git_diff::GitDiffTool;
 use read_file::ReadFileTool;
 use read_image::ReadImageTool;
@@ -95,7 +95,6 @@ impl ToolRegistry {
             registry.register(WebFetchTool::new(api_key));
         }
         registry.register(GitDiffTool);
-        registry.register(GeneratePatchTool);
         registry.register(ApplyPatchTool);
         registry.register(RunCommandTool);
         registry
@@ -109,12 +108,16 @@ impl ToolRegistry {
         self.tools.get(tool_name).map(|tool| tool.definition())
     }
 
-    pub fn proposed_action(&self, call: &AgentToolCall) -> AgentResult<AgentProposedAction> {
+    pub fn proposed_action(
+        &self,
+        context: &ToolExecutionContext,
+        call: &AgentToolCall,
+    ) -> AgentResult<AgentProposedAction> {
         let Some(tool) = self.tools.get(&call.tool) else {
             return Err(AgentError::new(format!("未知工具：{}", call.tool)));
         };
 
-        tool.proposed_action(call)
+        tool.proposed_action(context, call)
     }
 
     pub fn execute(&self, context: &ToolExecutionContext, call: &AgentToolCall) -> AgentToolResult {
@@ -191,6 +194,7 @@ pub struct ToolExecutionContext {
     workspace_root: Option<PathBuf>,
     attachment_library: Option<AgentAttachmentLibraryContext>,
     cancellation_token: AgentCancellationToken,
+    permissions: AgentPermissions,
 }
 
 impl ToolExecutionContext {
@@ -200,11 +204,15 @@ impl ToolExecutionContext {
             .and_then(|workspace| workspace.root_path.as_ref())
             .map(PathBuf::from);
         let attachment_library = context.and_then(|context| context.attachment_library.clone());
+        let permissions = context
+            .map(|context| context.permissions)
+            .unwrap_or_default();
 
         Self {
             workspace_root,
             attachment_library,
             cancellation_token: AgentCancellationToken::new(),
+            permissions,
         }
     }
 
@@ -239,10 +247,25 @@ impl ToolExecutionContext {
         Ok(root)
     }
 
+    pub(super) fn permissions(&self) -> AgentPermissions {
+        self.permissions
+    }
+
     pub(super) fn resolve_existing_path(&self, input_path: &str) -> AgentResult<PathBuf> {
         self.check_cancelled()?;
         if is_attachment_path(input_path) {
             return self.resolve_attachment_path(input_path);
+        }
+
+        let input_path = input_path.trim();
+        let candidate = Path::new(input_path);
+        if candidate.is_absolute() {
+            if self.permissions.read != AgentReadPermission::All {
+                return Err(AgentError::new("当前读取权限仅允许访问 workspace 内路径。"));
+            }
+            return candidate
+                .canonicalize()
+                .map_err(|error| AgentError::new(format!("路径不可访问：{error}")));
         }
 
         let root = self.workspace_root()?;
@@ -267,7 +290,16 @@ impl ToolExecutionContext {
                 .map(|reference| reference.read_path.clone());
         }
 
-        Ok(relative_display(&self.workspace_root()?, file_path))
+        if let Ok(root) = self.workspace_root() {
+            if file_path.starts_with(&root) {
+                return Ok(relative_display(&root, file_path));
+            }
+        }
+        if self.permissions.read == AgentReadPermission::All && file_path.is_absolute() {
+            return Ok(file_path.to_string_lossy().to_string());
+        }
+
+        Err(AgentError::new("路径必须位于已选择的 workspace 内。"))
     }
 
     pub(super) fn conversation_attachments(&self) -> &[AgentAttachmentReference] {
@@ -360,7 +392,11 @@ fn attachment_id_from_path(input_path: &str) -> AgentResult<String> {
 pub(super) trait AgentTool: Send + Sync {
     fn definition(&self) -> AgentToolDefinition;
     fn execute(&self, context: &ToolExecutionContext, args: Value) -> AgentResult<Value>;
-    fn proposed_action(&self, call: &AgentToolCall) -> AgentResult<AgentProposedAction> {
+    fn proposed_action(
+        &self,
+        _context: &ToolExecutionContext,
+        call: &AgentToolCall,
+    ) -> AgentResult<AgentProposedAction> {
         Ok(AgentProposedAction::ToolCall { call: call.clone() })
     }
 }
@@ -787,16 +823,6 @@ mod tests {
     }
 
     #[test]
-    fn registers_generate_patch_as_approval_tool() {
-        let registry = ToolRegistry::read_only_defaults_with_search(None);
-        let definition = registry.definition_for("generate_patch").unwrap();
-
-        assert_eq!(definition.name, "generate_patch");
-        assert!(definition.requires_workspace);
-        assert!(definition.requires_approval);
-    }
-
-    #[test]
     fn registers_apply_patch_as_approval_tool() {
         let registry = ToolRegistry::read_only_defaults_with_search(None);
         let definition = registry.definition_for("apply_patch").unwrap();
@@ -838,6 +864,7 @@ mod tests {
                 }],
                 project_attachments: Vec::new(),
             }),
+            permissions: Default::default(),
         }));
         let registry = ToolRegistry::read_only_defaults_with_search(None);
 
@@ -906,6 +933,7 @@ mod tests {
                 }],
                 project_attachments: Vec::new(),
             }),
+            permissions: Default::default(),
         }));
         let registry = ToolRegistry::read_only_defaults_with_search(None);
         let result = registry.execute(
@@ -924,6 +952,48 @@ mod tests {
         assert_eq!(value["path"], "@attachments/image1/pixel.png");
         assert_eq!(value["mimeType"], "image/png");
         assert!(value["image"]["dataBase64"].as_str().unwrap().len() > 10);
+    }
+
+    #[test]
+    fn absolute_read_requires_all_permission() {
+        let fixture = TestWorkspace::new();
+        let outside = std::env::temp_dir().join(format!(
+            "my-copilot-agent-outside-read-{}",
+            TEST_WORKSPACE_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::write(&outside, "outside content").unwrap();
+        let registry = ToolRegistry::read_only_defaults_with_search(None);
+        let call = AgentToolCall {
+            id: "call-outside".to_string(),
+            tool: "read_file".to_string(),
+            args: json!({ "path": outside.to_string_lossy() }),
+            approval_status: crate::protocol::AgentApprovalStatus::NotRequired,
+            reason: None,
+        };
+
+        let denied = registry.execute(&fixture.context(), &call);
+        assert!(!denied.ok);
+        assert!(denied.error.unwrap().contains("仅允许访问 workspace"));
+
+        let allowed = ToolExecutionContext::from_run_context(Some(&AgentRunContext {
+            conversation_id: None,
+            project_id: None,
+            workspace: Some(AgentWorkspaceContext {
+                project_id: None,
+                display_name: Some("test".to_string()),
+                root_path: Some(fixture.root.to_string_lossy().to_string()),
+            }),
+            attachment_library: None,
+            permissions: crate::protocol::AgentPermissions {
+                read: crate::protocol::AgentReadPermission::All,
+                ..Default::default()
+            },
+        }));
+        let result = registry.execute(&allowed, &call);
+        assert!(result.ok, "{:?}", result.error);
+        assert_eq!(result.result.unwrap()["content"], "outside content");
+
+        let _ = fs::remove_file(outside);
     }
 
     struct TestWorkspace {
@@ -949,6 +1019,7 @@ mod tests {
                     root_path: Some(self.root.to_string_lossy().to_string()),
                 }),
                 attachment_library: None,
+                permissions: Default::default(),
             }))
         }
     }

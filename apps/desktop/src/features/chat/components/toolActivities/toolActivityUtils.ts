@@ -17,7 +17,6 @@ export function getToolDisplayName(tool: string, t: Translate) {
     apply_patch: "tool.applyPatch",
     attachments_list: "tool.attachmentsList",
     attachments_list_project: "tool.attachmentsListProject",
-    generate_patch: "tool.generatePatch",
     git_diff: "tool.gitDiff",
     read_file: "tool.readFile",
     read_image: "tool.readImage",

@@ -14,6 +14,18 @@ export type AgentApiStyle = "openai_compatible" | "anthropic_compatible";
 
 export type AgentSearchMode = "auto" | "disabled" | "tavily";
 
+export type AgentReadPermission = "workspace_only" | "all";
+
+export type AgentWritePermission = "denied" | "workspace_only" | "all";
+
+export type AgentCommandPermission = "require_approval" | "auto_approve";
+
+export interface AgentPermissions {
+  read: AgentReadPermission;
+  write: AgentWritePermission;
+  command: AgentCommandPermission;
+}
+
 export type AgentPromptWorkMode = "coding" | "general";
 
 export type AgentPromptTone = "friendly" | "pragmatic";
@@ -35,7 +47,6 @@ export type AgentToolName =
   | "web_search"
   | "web_fetch"
   | "git_diff"
-  | "generate_patch"
   | "apply_patch"
   | "run_command"
   | (string & {});
@@ -45,6 +56,10 @@ export type AgentToolSafety = "read_only" | "requires_approval" | "destructive";
 export type AgentApprovalStatus = "not_required" | "required" | "approved" | "rejected";
 
 export type AgentApprovalDecisionStatus = "approved" | "rejected";
+
+export type AgentPatchOperation = "create" | "update" | "delete";
+
+export type AgentPatchResultStatus = "applied" | "failed" | "rejected";
 
 export type AgentCommandOutputStream = "stdout" | "stderr";
 
@@ -127,6 +142,7 @@ export interface AgentRunContext {
   projectId?: string | null;
   workspace?: AgentWorkspaceContext;
   attachmentLibrary?: AgentAttachmentLibraryContext;
+  permissions: AgentPermissions;
 }
 
 export interface AgentSearchConfig {
@@ -216,6 +232,7 @@ export interface AgentConversationTurnInput {
   temperature?: number;
   mode?: AgentRunMode;
   promptPreferences?: AgentPromptPreferences;
+  permissions?: AgentPermissions;
 }
 
 export interface AgentConversationMessage {
@@ -269,12 +286,35 @@ export interface AgentToolResult {
   error?: string;
 }
 
+export interface AgentToolContinuation {
+  call: AgentToolCall;
+  result: AgentToolResult;
+}
+
 export interface AgentDiffProposal {
   id: string;
+  operation: AgentPatchOperation;
   filePath: string;
   patch: string;
+  baseRevision?: string;
   summary?: string;
   approvalStatus: AgentApprovalStatus;
+}
+
+export interface AgentPatchResult {
+  status: AgentPatchResultStatus;
+  operation: AgentPatchOperation;
+  filePath: string;
+  appliedFilePaths: string[];
+  gitDiff?: AgentGitDiffSnapshot;
+  gitDiffError?: string;
+  error?: string;
+  message?: string;
+}
+
+export interface AgentGitDiffSnapshot {
+  patch: string;
+  truncated: boolean;
 }
 
 export interface AgentCommandRequest {

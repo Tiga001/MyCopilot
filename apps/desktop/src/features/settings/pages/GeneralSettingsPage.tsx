@@ -1,8 +1,14 @@
 import { useState } from "react";
 import type { FocusEvent } from "react";
+import type {
+  AgentCommandPermission,
+  AgentReadPermission,
+  AgentWritePermission,
+} from "@agent";
 import { Check, ChevronDown } from "lucide-react";
 import { useFrontendConfig } from "../../../config/FrontendConfigProvider";
 import type { AppLanguage } from "../../../config/frontendTranslations";
+import type { UiPreferencesSnapshot } from "../../storage/storageClient";
 import "./GeneralSettingsPage.css";
 
 const LANGUAGE_DISPLAY_OPTIONS: Array<{ value: AppLanguage; label: string }> = [
@@ -10,7 +16,38 @@ const LANGUAGE_DISPLAY_OPTIONS: Array<{ value: AppLanguage; label: string }> = [
   { value: "en-US", label: "English (United States)" },
 ];
 
-export function GeneralSettingsPage() {
+interface GeneralSettingsPageProps {
+  onUiPreferencesChange: (patch: Partial<UiPreferencesSnapshot>) => void;
+  uiPreferences: UiPreferencesSnapshot;
+}
+
+interface PermissionSegmentProps {
+  ariaLabel: string;
+  onChange: (value: string) => void;
+  options: Array<{ label: string; value: string }>;
+  value: string;
+}
+
+function PermissionSegment({ ariaLabel, onChange, options, value }: PermissionSegmentProps) {
+  return (
+    <span className="general-permission-segment" role="radiogroup" aria-label={ariaLabel}>
+      {options.map((option) => (
+        <button
+          type="button"
+          role="radio"
+          aria-checked={option.value === value}
+          data-selected={option.value === value || undefined}
+          key={option.value}
+          onClick={() => onChange(option.value)}
+        >
+          {option.label}
+        </button>
+      ))}
+    </span>
+  );
+}
+
+export function GeneralSettingsPage({ onUiPreferencesChange, uiPreferences }: GeneralSettingsPageProps) {
   const { language, setLanguage, t } = useFrontendConfig();
   const [isLanguageMenuOpen, setLanguageMenuOpen] = useState(false);
   const selectedLanguage =
@@ -20,6 +57,14 @@ export function GeneralSettingsPage() {
     if (!event.currentTarget.contains(event.relatedTarget)) {
       setLanguageMenuOpen(false);
     }
+  };
+  const updateCustomPermissions = (patch: Partial<UiPreferencesSnapshot["customPermissions"]>) => {
+    onUiPreferencesChange({
+      customPermissions: {
+        ...uiPreferences.customPermissions,
+        ...patch,
+      },
+    });
   };
 
   return (
@@ -74,6 +119,64 @@ export function GeneralSettingsPage() {
                   })}
                 </div>
               )}
+            </span>
+          </div>
+        </div>
+      </section>
+
+      <section className="settings-list-section" aria-labelledby="custom-permissions-heading">
+        <h2 id="custom-permissions-heading">{t("general.customPermissions")}</h2>
+
+        <div className="settings-list general-permissions-list">
+          <div className="settings-list-row">
+            <span className="settings-list-row__text">
+              <span className="settings-list-row__title">{t("general.readPermission")}</span>
+            </span>
+            <span className="settings-list-row__control">
+              <PermissionSegment
+                ariaLabel={t("general.readPermission")}
+                value={uiPreferences.customPermissions.read}
+                options={[
+                  { value: "workspace_only", label: t("general.workspaceOnly") },
+                  { value: "all", label: t("general.allLocations") },
+                ]}
+                onChange={(value) => updateCustomPermissions({ read: value as AgentReadPermission })}
+              />
+            </span>
+          </div>
+
+          <div className="settings-list-row">
+            <span className="settings-list-row__text">
+              <span className="settings-list-row__title">{t("general.writePermission")}</span>
+            </span>
+            <span className="settings-list-row__control">
+              <PermissionSegment
+                ariaLabel={t("general.writePermission")}
+                value={uiPreferences.customPermissions.write}
+                options={[
+                  { value: "denied", label: t("general.writeDenied") },
+                  { value: "workspace_only", label: t("general.workspaceOnly") },
+                  { value: "all", label: t("general.allLocations") },
+                ]}
+                onChange={(value) => updateCustomPermissions({ write: value as AgentWritePermission })}
+              />
+            </span>
+          </div>
+
+          <div className="settings-list-row">
+            <span className="settings-list-row__text">
+              <span className="settings-list-row__title">{t("general.commandPermission")}</span>
+            </span>
+            <span className="settings-list-row__control">
+              <PermissionSegment
+                ariaLabel={t("general.commandPermission")}
+                value={uiPreferences.customPermissions.command}
+                options={[
+                  { value: "require_approval", label: t("general.requireApproval") },
+                  { value: "auto_approve", label: t("general.autoApprove") },
+                ]}
+                onChange={(value) => updateCustomPermissions({ command: value as AgentCommandPermission })}
+              />
             </span>
           </div>
         </div>

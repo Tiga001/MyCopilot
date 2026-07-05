@@ -2,6 +2,7 @@ mod agent_actions;
 mod commands;
 mod fs;
 mod git;
+mod permissions;
 mod process;
 mod storage;
 

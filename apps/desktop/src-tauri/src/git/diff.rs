@@ -1,21 +1,14 @@
 use crate::fs::{canonical_workspace_root, clean_relative_path, relative_display};
-use serde::Serialize;
+use my_copilot_agent::AgentGitDiffSnapshot;
 use std::path::Path;
 use std::process::Command;
 
 const MAX_GIT_DIFF_BYTES: usize = 240 * 1024;
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GitDiffSnapshot {
-    pub patch: String,
-    pub truncated: bool,
-}
-
 pub fn read_git_diff(
     workspace_root: &Path,
     relative_path: Option<&str>,
-) -> Result<GitDiffSnapshot, String> {
+) -> Result<AgentGitDiffSnapshot, String> {
     let root = canonical_workspace_root(workspace_root)?;
     let mut command = Command::new("git");
     command.arg("-C").arg(&root).arg("diff").arg("--");
@@ -38,7 +31,7 @@ pub fn read_git_diff(
     let patch = String::from_utf8_lossy(&output.stdout);
     let (patch, truncated) = truncate_bytes(&patch, MAX_GIT_DIFF_BYTES);
 
-    Ok(GitDiffSnapshot { patch, truncated })
+    Ok(AgentGitDiffSnapshot { patch, truncated })
 }
 
 fn truncate_bytes(value: &str, max_bytes: usize) -> (String, bool) {

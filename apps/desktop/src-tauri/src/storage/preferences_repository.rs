@@ -1,5 +1,8 @@
 use crate::storage::models::UiPreferencesRecord;
 use crate::storage::now_ms;
+use my_copilot_agent::{
+    AgentCommandPermission, AgentPermissions, AgentReadPermission, AgentWritePermission,
+};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::HashSet;
 
@@ -24,6 +27,9 @@ pub fn load_ui_preferences(connection: &Connection) -> rusqlite::Result<UiPrefer
                 profile_display_name,
                 profile_handle,
                 profile_avatar_data_url,
+                custom_read_permission,
+                custom_write_permission,
+                custom_command_permission,
                 updated_at
             FROM ui_preferences
             WHERE id = 'default'
@@ -43,7 +49,12 @@ pub fn load_ui_preferences(connection: &Connection) -> rusqlite::Result<UiPrefer
                     profile_display_name: row.get(7)?,
                     profile_handle: row.get(8)?,
                     profile_avatar_data_url: row.get(9)?,
-                    updated_at: row.get(10)?,
+                    custom_permissions: AgentPermissions {
+                        read: parse_read_permission(row.get::<_, String>(10)?.as_str()),
+                        write: parse_write_permission(row.get::<_, String>(11)?.as_str()),
+                        command: parse_command_permission(row.get::<_, String>(12)?.as_str()),
+                    },
+                    updated_at: row.get(13)?,
                 })
             },
         )
@@ -77,9 +88,12 @@ pub fn save_ui_preferences(
             profile_display_name,
             profile_handle,
             profile_avatar_data_url,
+            custom_read_permission,
+            custom_write_permission,
+            custom_command_permission,
             updated_at
         )
-        VALUES ('default', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+        VALUES ('default', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
         ON CONFLICT(id) DO UPDATE SET
             sidebar_conversation_sort = excluded.sidebar_conversation_sort,
             sidebar_project_sort = excluded.sidebar_project_sort,
@@ -91,6 +105,9 @@ pub fn save_ui_preferences(
             profile_display_name = excluded.profile_display_name,
             profile_handle = excluded.profile_handle,
             profile_avatar_data_url = excluded.profile_avatar_data_url,
+            custom_read_permission = excluded.custom_read_permission,
+            custom_write_permission = excluded.custom_write_permission,
+            custom_command_permission = excluded.custom_command_permission,
             updated_at = excluded.updated_at
         ",
         params![
@@ -116,6 +133,9 @@ pub fn save_ui_preferences(
             &preferences.profile_display_name,
             &preferences.profile_handle,
             preferences.profile_avatar_data_url.as_deref(),
+            read_permission_value(preferences.custom_permissions.read),
+            write_permission_value(preferences.custom_permissions.write),
+            command_permission_value(preferences.custom_permissions.command),
             timestamp,
         ],
     )?;
@@ -138,6 +158,11 @@ fn default_ui_preferences() -> UiPreferencesRecord {
         native_font_smoothing: false,
         show_token_usage_details: true,
         translucent_sidebar: false,
+        custom_permissions: AgentPermissions {
+            read: AgentReadPermission::WorkspaceOnly,
+            write: AgentWritePermission::WorkspaceOnly,
+            command: AgentCommandPermission::RequireApproval,
+        },
         updated_at: 0,
     }
 }
@@ -169,7 +194,52 @@ fn normalize_preferences(preferences: UiPreferencesRecord) -> UiPreferencesRecor
         native_font_smoothing: preferences.native_font_smoothing,
         show_token_usage_details: preferences.show_token_usage_details,
         translucent_sidebar: preferences.translucent_sidebar,
+        custom_permissions: preferences.custom_permissions,
         updated_at: preferences.updated_at,
+    }
+}
+
+fn parse_read_permission(value: &str) -> AgentReadPermission {
+    match value {
+        "all" => AgentReadPermission::All,
+        _ => AgentReadPermission::WorkspaceOnly,
+    }
+}
+
+fn parse_write_permission(value: &str) -> AgentWritePermission {
+    match value {
+        "denied" => AgentWritePermission::Denied,
+        "all" => AgentWritePermission::All,
+        _ => AgentWritePermission::WorkspaceOnly,
+    }
+}
+
+fn parse_command_permission(value: &str) -> AgentCommandPermission {
+    match value {
+        "auto_approve" => AgentCommandPermission::AutoApprove,
+        _ => AgentCommandPermission::RequireApproval,
+    }
+}
+
+fn read_permission_value(value: AgentReadPermission) -> &'static str {
+    match value {
+        AgentReadPermission::WorkspaceOnly => "workspace_only",
+        AgentReadPermission::All => "all",
+    }
+}
+
+fn write_permission_value(value: AgentWritePermission) -> &'static str {
+    match value {
+        AgentWritePermission::Denied => "denied",
+        AgentWritePermission::WorkspaceOnly => "workspace_only",
+        AgentWritePermission::All => "all",
+    }
+}
+
+fn command_permission_value(value: AgentCommandPermission) -> &'static str {
+    match value {
+        AgentCommandPermission::RequireApproval => "require_approval",
+        AgentCommandPermission::AutoApprove => "auto_approve",
     }
 }
 
@@ -227,5 +297,44 @@ fn normalize_value(value: &str, allowed_values: &[&str], fallback: &str) -> Stri
         value.to_string()
     } else {
         fallback.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::migrations;
+
+    #[test]
+    fn custom_permissions_use_expected_defaults_and_round_trip() {
+        let connection = Connection::open_in_memory().expect("test database should open");
+        migrations::run_migrations(&connection).expect("test database should migrate");
+
+        let mut preferences = load_ui_preferences(&connection).expect("preferences should load");
+        assert_eq!(
+            preferences.custom_permissions,
+            AgentPermissions {
+                read: AgentReadPermission::WorkspaceOnly,
+                write: AgentWritePermission::WorkspaceOnly,
+                command: AgentCommandPermission::RequireApproval,
+            }
+        );
+
+        preferences.custom_permissions = AgentPermissions {
+            read: AgentReadPermission::All,
+            write: AgentWritePermission::Denied,
+            command: AgentCommandPermission::AutoApprove,
+        };
+        save_ui_preferences(&connection, preferences).expect("preferences should save");
+
+        let reloaded = load_ui_preferences(&connection).expect("preferences should reload");
+        assert_eq!(
+            reloaded.custom_permissions,
+            AgentPermissions {
+                read: AgentReadPermission::All,
+                write: AgentWritePermission::Denied,
+                command: AgentCommandPermission::AutoApprove,
+            }
+        );
     }
 }

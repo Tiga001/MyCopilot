@@ -16,11 +16,11 @@ impl AgentTool for RunCommandTool {
     fn definition(&self) -> AgentToolDefinition {
         AgentToolDefinition {
             name: "run_command".to_string(),
-            description: "Request approval to run a shell command in the selected workspace. This tool never executes automatically.".to_string(),
+            description: "Run one single-line shell command through the host for builds, tests, queries, or program execution. Never use this tool to create, update, or delete files; use apply_patch instead. Approval behavior follows the current command permission. The command must not contain literal newlines or null characters.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "command": { "type": "string", "description": "Command line to run after user approval." },
+                    "command": { "type": "string", "description": "A single-line build, test, query, or program-execution command without literal newline or null characters. Do not use shell redirection, printf, echo, cat, tee, sed -i, or scripts to write file content." },
                     "cwd": { "type": "string", "description": "Optional workspace-relative working directory. Defaults to workspace root." },
                     "timeoutMs": { "type": "integer", "minimum": 1, "maximum": MAX_TIMEOUT_MS },
                     "reason": { "type": "string", "description": "Why this command is needed and what result is expected." }
@@ -39,9 +39,13 @@ impl AgentTool for RunCommandTool {
         ))
     }
 
-    fn proposed_action(&self, call: &AgentToolCall) -> AgentResult<AgentProposedAction> {
+    fn proposed_action(
+        &self,
+        context: &ToolExecutionContext,
+        call: &AgentToolCall,
+    ) -> AgentResult<AgentProposedAction> {
         Ok(AgentProposedAction::Command {
-            command: command_request_from_call(call)?,
+            command: command_request_from_call(context, call)?,
         })
     }
 }
@@ -55,11 +59,14 @@ struct RunCommandArgs {
     reason: Option<String>,
 }
 
-fn command_request_from_call(call: &AgentToolCall) -> AgentResult<AgentCommandRequest> {
+fn command_request_from_call(
+    context: &ToolExecutionContext,
+    call: &AgentToolCall,
+) -> AgentResult<AgentCommandRequest> {
     let args: RunCommandArgs = serde_json::from_value(call.args.clone())
         .map_err(|error| AgentError::new(format!("run_command 参数无效：{error}")))?;
     let command = sanitize_command(&args.command)?;
-    let cwd = sanitize_cwd(args.cwd)?;
+    let cwd = sanitize_cwd(args.cwd, context.permissions().write)?;
     let reason = args
         .reason
         .or_else(|| call.reason.clone())
@@ -93,20 +100,32 @@ fn sanitize_command(command: &str) -> AgentResult<String> {
     }
     if command.contains('\0') || command.contains('\n') || command.contains('\r') {
         return Err(AgentError::new(
-            "run_command.command 不能包含空字符或换行符。",
+            "run_command.command 不能包含空字符或换行符。请改成单行命令；文件创建、编辑或删除必须使用 apply_patch。",
         ));
     }
 
     Ok(command.to_string())
 }
 
-fn sanitize_cwd(cwd: Option<String>) -> AgentResult<Option<String>> {
+fn sanitize_cwd(
+    cwd: Option<String>,
+    write_permission: crate::protocol::AgentWritePermission,
+) -> AgentResult<Option<String>> {
     let Some(cwd) = cwd else {
         return Ok(None);
     };
     let cwd = cwd.trim();
     if cwd.is_empty() || cwd == "." {
         return Ok(None);
+    }
+
+    if std::path::Path::new(cwd).is_absolute() {
+        if write_permission != crate::protocol::AgentWritePermission::All {
+            return Err(AgentError::new(
+                "命令在 workspace 外运行需要 write=all 权限。",
+            ));
+        }
+        return Ok(Some(cwd.to_string()));
     }
 
     Ok(Some(
@@ -267,7 +286,9 @@ fn has_write_pattern(command: &str, program: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{AgentApprovalStatus, AgentToolCall};
+    use crate::protocol::{
+        AgentApprovalStatus, AgentPermissions, AgentRunContext, AgentToolCall, AgentWritePermission,
+    };
     use serde_json::json;
 
     #[test]
@@ -284,7 +305,17 @@ mod tests {
             approval_status: AgentApprovalStatus::Required,
             reason: None,
         };
-        let request = command_request_from_call(&call).unwrap();
+        let context = ToolExecutionContext::from_run_context(Some(&AgentRunContext {
+            conversation_id: None,
+            project_id: None,
+            workspace: None,
+            attachment_library: None,
+            permissions: AgentPermissions {
+                write: AgentWritePermission::WorkspaceOnly,
+                ..Default::default()
+            },
+        }));
+        let request = command_request_from_call(&context, &call).unwrap();
 
         assert_eq!(request.id, "tool-1");
         assert_eq!(request.command, "cargo test");
@@ -307,7 +338,11 @@ mod tests {
 
     #[test]
     fn rejects_cwd_outside_workspace() {
-        let error = sanitize_cwd(Some("../outside".to_string())).unwrap_err();
+        let error = sanitize_cwd(
+            Some("../outside".to_string()),
+            AgentWritePermission::WorkspaceOnly,
+        )
+        .unwrap_err();
 
         assert!(error.to_string().contains("路径不能包含"));
     }

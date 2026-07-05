@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AgentInputAttachment, AgentPromptPreferences } from "@agent";
+import type { AgentInputAttachment, AgentPermissions, AgentPromptPreferences } from "@agent";
 import type { ModelConfig, SearchMode } from "../../config/modelConfig";
 import type { AppProject } from "../../config/projectConfig";
 import type {
@@ -120,6 +120,7 @@ export interface UiPreferencesSnapshot {
   nativeFontSmoothing: boolean;
   showTokenUsageDetails: boolean;
   translucentSidebar: boolean;
+  customPermissions: AgentPermissions;
   updatedAt: number;
 }
 
@@ -455,7 +456,10 @@ function mapDraftsFromPersistence(drafts: PersistedComposerDraft[]): Record<stri
 function mapDraftFromPersistence(draft: PersistedComposerDraft): ChatComposerDraft {
   return {
     message: draft.message,
-    permissionMode: draft.permissionMode === "default" ? "default" : "full",
+    permissionMode:
+      draft.permissionMode === "default" || draft.permissionMode === "custom"
+        ? draft.permissionMode
+        : "full",
     modelId: draft.modelId ?? "",
     projectId: draft.projectId,
     attachments: parseDraftAttachments(draft.attachmentsJson),
@@ -525,6 +529,11 @@ export function defaultUiPreferences(): UiPreferencesSnapshot {
     nativeFontSmoothing: false,
     showTokenUsageDetails: true,
     translucentSidebar: false,
+    customPermissions: {
+      read: "workspace_only",
+      write: "workspace_only",
+      command: "require_approval",
+    },
     updatedAt: 0,
   };
 }
@@ -554,7 +563,22 @@ function normalizeUiPreferences(preferences: UiPreferencesSnapshot | null | unde
         ? preferences.showTokenUsageDetails
         : defaults.showTokenUsageDetails,
     translucentSidebar: Boolean(preferences.translucentSidebar),
+    customPermissions: normalizeAgentPermissions(preferences.customPermissions),
     updatedAt: preferences.updatedAt ?? 0,
+  };
+}
+
+function normalizeAgentPermissions(permissions: AgentPermissions | null | undefined): AgentPermissions {
+  const defaults = defaultUiPreferences().customPermissions;
+  if (!permissions) return defaults;
+
+  return {
+    read: permissions.read === "all" ? "all" : defaults.read,
+    write:
+      permissions.write === "denied" || permissions.write === "all"
+        ? permissions.write
+        : defaults.write,
+    command: permissions.command === "auto_approve" ? "auto_approve" : defaults.command,
   };
 }
 

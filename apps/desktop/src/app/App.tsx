@@ -20,8 +20,10 @@ import type {
   ChatConversation,
   ChatMessage,
   ChatMessageUiState,
+  ChatPermissionMode,
   ChatSubmitOptions,
 } from "../features/chat/chatTypes";
+import { resolveChatPermissions } from "../features/chat/chatPermissions";
 import { cancelPendingReadActivities } from "../features/chat/agentReadActivities";
 import { cancelPendingWebSearchActivities } from "../features/chat/agentWebSearch";
 import {
@@ -273,6 +275,7 @@ export function App() {
   const [composerDrafts, setComposerDrafts] = useState<Record<string, ChatComposerDraft>>({});
   const [hasLoadedComposerDrafts, setHasLoadedComposerDrafts] = useState(false);
   const [uiPreferences, setUiPreferences] = useState<UiPreferencesSnapshot>(() => defaultUiPreferences());
+  const customPermissionsRef = useRef(uiPreferences.customPermissions);
   const [hasLoadedUiPreferences, setHasLoadedUiPreferences] = useState(false);
   const [settingsInitialPage, setSettingsInitialPage] = useState<SettingsPageId>("general");
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
@@ -285,6 +288,8 @@ export function App() {
   useEffect(() => {
     activeConversationIdRef.current = activeConversationId;
   }, [activeConversationId]);
+
+  customPermissionsRef.current = uiPreferences.customPermissions;
 
   const resizeSide = useCallback(
     (side: Side, deltaX: number) => {
@@ -1004,6 +1009,7 @@ export function App() {
       content: string,
       modelId: string,
       projectId: string | null,
+      permissionMode: ChatPermissionMode,
       attachments: AgentInputAttachment[] | undefined,
       title?: string,
     ) => {
@@ -1013,6 +1019,7 @@ export function App() {
         conversationId,
         maxTokens: DEFAULT_AGENT_MAX_TOKENS,
         modelId,
+        permissions: resolveChatPermissions(permissionMode, customPermissionsRef.current),
         projectId,
         userMessageId,
       };
@@ -1178,6 +1185,7 @@ export function App() {
         content,
         options.modelId,
         options.projectId,
+        options.permissionMode,
         options.attachments,
         title,
       );
@@ -1223,6 +1231,7 @@ export function App() {
         content,
         options.modelId,
         activeConversationSnapshot.projectId,
+        options.permissionMode,
         options.attachments,
       );
     },

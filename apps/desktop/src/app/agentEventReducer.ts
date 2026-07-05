@@ -106,7 +106,7 @@ export function appendTimelineItem(
 }
 
 function removeTransientToolTimelineItems(timeline: ChatAgentTimelineItem[]) {
-  return timeline.filter((item) => item.type !== "approval");
+  return timeline;
 }
 
 function appendToolCallToTimeline(
@@ -128,6 +128,21 @@ function appendToolCallToTimeline(
 
 function getActionToolCall(action: AgentProposedAction): AgentToolCall | null {
   if (action.type === "tool_call") return action.call;
+
+  if (action.type === "diff") {
+    return {
+      id: action.diff.id,
+      tool: "apply_patch",
+      args: {
+        operation: action.diff.operation,
+        filePath: action.diff.filePath,
+        patch: action.diff.patch,
+        summary: action.diff.summary,
+      },
+      approvalStatus: action.diff.approvalStatus,
+      reason: action.diff.summary,
+    };
+  }
 
   if (action.type !== "command") return null;
 
@@ -235,6 +250,21 @@ function createRejectedToolResult(
 ): AgentToolResult | null {
   const call = getActionToolCall(action);
   if (!call) return null;
+
+  if (action.type === "diff") {
+    return {
+      callId: call.id,
+      tool: "apply_patch",
+      ok: true,
+      result: {
+        status: "rejected",
+        operation: action.diff.operation,
+        filePath: action.diff.filePath,
+        appliedFilePaths: [],
+        message,
+      },
+    };
+  }
 
   return {
     callId: call.id,
@@ -472,18 +502,24 @@ export function applyAgentEventToChatMessage(message: ChatMessage, agentEvent: A
   }
 
   if (agentEvent.type === "diff") {
+    const call = getActionToolCall({ type: "diff", diff: agentEvent.diff });
+    const runWithDiff = {
+      ...currentRun,
+      diffs: upsertById(currentRun.diffs, agentEvent.diff, (diff) => diff.id),
+      toolCalls: call
+        ? upsertById(currentRun.toolCalls, call, (candidate) => candidate.id)
+        : currentRun.toolCalls,
+    };
+
     return {
       ...message,
       status: "pending",
       agentRun: {
-        ...currentRun,
-        status: "running",
-        diffs: upsertById(currentRun.diffs, agentEvent.diff, (diff) => diff.id),
-        timeline: appendTimelineItem(currentRun, {
-          id: `diff-${agentEvent.diff.id}`,
-          type: "diff",
-          diffId: agentEvent.diff.id,
-        }),
+        ...runWithDiff,
+        status: currentRun.status === "waiting_for_approval" ? currentRun.status : "running",
+        timeline: call
+          ? appendToolCallToTimeline(runWithDiff, call.id)
+          : currentRun.timeline,
       },
     };
   }
@@ -620,9 +656,7 @@ export function applyAgentActionExecutionToChatMessage(
       ...messageWithAgentOutput,
       agentRun: {
         ...currentRun,
-        approvals: currentRun.status === "waiting_for_approval"
-          ? currentRun.approvals
-          : removeAgentAction(currentRun.approvals, execution.actionId),
+        approvals: removeAgentAction(currentRun.approvals, execution.actionId),
         webSearchActivities: normalizeWebSearchActivities(currentRun),
         readActivities: normalizeReadActivities(currentRun),
         timeline: removeTransientToolTimelineItems(currentRun.timeline),
@@ -645,9 +679,15 @@ export function applyAgentActionExecutionToChatMessage(
           : call,
       ),
       toolResults: upsertById(currentRun.toolResults, execution.toolResult, (result) => result.callId),
-      approvals: currentRun.status === "waiting_for_approval"
-        ? currentRun.approvals
-        : removeAgentAction(currentRun.approvals, execution.actionId),
+      diffs: currentRun.diffs.map((diff) =>
+        diff.id === execution.actionId
+          ? {
+              ...diff,
+              approvalStatus: finalApprovalStatus,
+            }
+          : diff,
+      ),
+      approvals: removeAgentAction(currentRun.approvals, execution.actionId),
       webSearchActivities: normalizeWebSearchActivities(currentRun),
       readActivities: normalizeReadActivities(currentRun),
       timeline: removeTransientToolTimelineItems(currentRun.timeline),

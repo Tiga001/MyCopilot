@@ -5,7 +5,6 @@ import {
   Check,
   Copy,
   Database,
-  PencilLine,
 } from "lucide-react";
 import type { AgentProposedAction, AgentToolCall, AgentUsage } from "@agent";
 import { useFrontendConfig } from "../../../config/FrontendConfigProvider";
@@ -28,7 +27,6 @@ import {
   getAttachmentPreviewUrl,
 } from "../attachmentDisplay";
 import { ChatMarkdown } from "./ChatMarkdown";
-import { AgentActivityDisclosure } from "./toolActivities/AgentActivityDisclosure";
 import { AgentToolActivity } from "./toolActivities/AgentToolActivity";
 import {
   ReadToolActivityGroup,
@@ -151,16 +149,6 @@ function getToolResult(run: ChatAgentRunView, callId: string) {
   return run.toolResults.find((result) => result.callId === callId);
 }
 
-function getActionId(action: AgentProposedAction) {
-  if (action.type === "diff") return action.diff.id;
-  if (action.type === "command") return action.command.id;
-  return action.call.id;
-}
-
-function getActionById(run: ChatAgentRunView, actionId: string) {
-  return run.approvals.find((action) => getActionId(action) === actionId);
-}
-
 function isRunSettled(run: ChatAgentRunView) {
   return (
     run.status === "completed" ||
@@ -189,15 +177,9 @@ function hasDisplayableContent(content: string) {
   return Boolean(content.trim()) && !isThinkingPlaceholder(content);
 }
 
-function isPendingApprovalStatus(status?: string) {
-  return status === "required" || status === "not_required";
-}
-
 function isTimelineItemRenderable(run: ChatAgentRunView, item: ChatAgentTimelineItem) {
   if (item.type === "message") return Boolean(item.content.trim());
   if (item.type === "tool_call") return run.toolCalls.some((candidate) => candidate.id === item.callId);
-  if (item.type === "diff") return run.diffs.some((candidate) => candidate.id === item.diffId);
-  if (item.type === "approval") return false;
   return true;
 }
 
@@ -255,19 +237,6 @@ function isBottomTimelineItemSpecificPendingStatus(
 
   if (item.type === "tool_call") {
     return !getToolResult(run, item.callId);
-  }
-
-  if (item.type === "diff") {
-    const diff = run.diffs.find((candidate) => candidate.id === item.diffId);
-    return Boolean(diff && isPendingApprovalStatus(diff.approvalStatus));
-  }
-
-  if (item.type === "approval") {
-    const action = getActionById(run, item.actionId);
-    if (!action) return false;
-    if (action.type === "diff") return isPendingApprovalStatus(action.diff.approvalStatus);
-    if (action.type === "command") return isPendingApprovalStatus(action.command.approvalStatus);
-    return isPendingApprovalStatus(action.call.approvalStatus);
   }
 
   return false;
@@ -586,32 +555,6 @@ function ChatMessageActions({
   );
 }
 
-function AgentDiffActivity({ run, diffId }: { run: ChatAgentRunView; diffId: string }) {
-  const { t } = useFrontendConfig();
-  const diff = run.diffs.find((candidate) => candidate.id === diffId);
-  if (!diff) return null;
-  const isPending = isPendingApprovalStatus(diff.approvalStatus);
-
-  return (
-    <AgentActivityDisclosure
-      className="agent-activity--diff"
-      hasDetails
-      icon={PencilLine}
-      isPending={isPending}
-      label={formatTranslation(
-        t,
-        diff.approvalStatus === "approved" ? "agent.diff.edited" : "agent.diff.editing",
-        { filePath: diff.filePath },
-      )}
-    >
-      <div className="agent-activity__details">
-        {diff.summary && <p>{diff.summary}</p>}
-        <pre>{diff.patch}</pre>
-      </div>
-    </AgentActivityDisclosure>
-  );
-}
-
 function AgentThinkingActivity() {
   const { t } = useFrontendConfig();
 
@@ -659,24 +602,20 @@ function AgentTimelineItemView({
     if (!call) return null;
     const webActivity = run.webSearchActivities?.find((candidate) => candidate.callId === call.id);
     const readActivity = run.readActivities?.find((candidate) => candidate.callId === call.id);
+    const diff = call.tool === "apply_patch"
+      ? run.diffs.find((candidate) => candidate.id === call.id)
+      : undefined;
     const result = getToolResult(run, call.id);
     return (
       <AgentToolActivity
         cancelled={run.status === "cancelled" && !result}
         call={call}
+        diff={diff}
         readActivity={readActivity}
         result={result}
         webActivity={webActivity}
       />
     );
-  }
-
-  if (item.type === "diff") {
-    return <AgentDiffActivity diffId={item.diffId} run={run} />;
-  }
-
-  if (item.type === "approval") {
-    return null;
   }
 
   return (

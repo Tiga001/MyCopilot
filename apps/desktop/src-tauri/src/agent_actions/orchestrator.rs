@@ -1,14 +1,16 @@
 use crate::agent_actions::pending::{AgentActionState, PendingAgentAction};
 use crate::fs::patch::{apply_unified_diff, PatchApplyResult};
-use crate::git::diff::{read_git_diff, GitDiffSnapshot};
+use crate::git::diff::read_git_diff;
+use crate::permissions::policy_from_input;
 use crate::process::command_runner::{
     run_approved_command, CommandExecutionResult, CommandRunState,
 };
 use crate::storage::{chat_repository, now_ms, StorageState};
 use my_copilot_agent::{
-    send_chat, AgentApprovalDecision, AgentApprovalDecisionStatus, AgentChatInput,
-    AgentChatMessage, AgentChatOutput, AgentCommandRequest, AgentDiffProposal, AgentProposedAction,
-    AgentToolResult,
+    send_chat, AgentApprovalDecision, AgentApprovalDecisionStatus, AgentApprovalStatus,
+    AgentCancellationToken, AgentChatInput, AgentChatOutput, AgentCommandRequest,
+    AgentDiffProposal, AgentPatchResult, AgentPatchResultStatus, AgentPermissions,
+    AgentProposedAction, AgentToolCall, AgentToolContinuation, AgentToolResult,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -30,25 +32,12 @@ pub struct AgentActionExecutionOutput {
     pub tool_name: String,
     pub status: AgentActionExecutionStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub patch_result: Option<AgentPatchExecutionResult>,
+    pub patch_result: Option<AgentPatchResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command_result: Option<AgentCommandExecutionResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_result: Option<AgentToolResult>,
     pub agent_output: AgentChatOutput,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentPatchExecutionResult {
-    pub file_path: String,
-    pub applied_file_paths: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub git_diff: Option<GitDiffSnapshot>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub git_diff_error: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -101,6 +90,9 @@ pub async fn reject_action(
     if pending.tool_name == "run_command" {
         return reject_command_action(action_state, storage_state, pending, message).await;
     }
+    if pending.tool_name == "apply_patch" {
+        return reject_patch_action(action_state, storage_state, pending, message).await;
+    }
 
     let mut input = pending.input.clone();
     input.approval_decision = Some(AgentApprovalDecision {
@@ -134,6 +126,66 @@ pub async fn reject_action(
     })
 }
 
+async fn reject_patch_action(
+    action_state: &AgentActionState,
+    storage_state: &StorageState,
+    pending: PendingAgentAction,
+    message: Option<String>,
+) -> Result<AgentActionExecutionOutput, String> {
+    let rejected_message = message
+        .map(|message| message.trim().to_string())
+        .filter(|message| !message.is_empty());
+    let diff = match &pending.action {
+        AgentProposedAction::Diff { diff } => diff,
+        _ => return Err("apply_patch pending action 缺少 diff proposal。".to_string()),
+    };
+    let patch_result = AgentPatchResult {
+        status: AgentPatchResultStatus::Rejected,
+        operation: diff.operation,
+        file_path: diff.file_path.clone(),
+        applied_file_paths: Vec::new(),
+        git_diff: None,
+        git_diff_error: None,
+        error: None,
+        message: rejected_message.clone(),
+    };
+    let tool_result = patch_tool_result(&pending.action_id, true, &patch_result);
+
+    let mut input = pending.input.clone();
+    input.approval_decision = Some(AgentApprovalDecision {
+        action_id: pending.action_id.clone(),
+        status: AgentApprovalDecisionStatus::Rejected,
+        message: rejected_message,
+    });
+    input.tool_continuation = Some(tool_continuation_for_action(
+        &pending,
+        AgentApprovalStatus::Rejected,
+        tool_result.clone(),
+    )?);
+
+    let agent_output = send_chat(input.clone())
+        .await
+        .map_err(|error| error.to_string())?;
+    action_state.store_output_actions_with_message(
+        &input,
+        &agent_output,
+        pending.conversation_id.clone(),
+        pending.assistant_message_id.clone(),
+    );
+    persist_assistant_output(storage_state, &pending, &agent_output);
+
+    Ok(AgentActionExecutionOutput {
+        action_id: pending.action_id,
+        action_type: pending.action_type,
+        tool_name: pending.tool_name,
+        status: AgentActionExecutionStatus::Rejected,
+        patch_result: Some(patch_result),
+        command_result: None,
+        tool_result: Some(tool_result),
+        agent_output,
+    })
+}
+
 async fn reject_command_action(
     action_state: &AgentActionState,
     storage_state: &StorageState,
@@ -156,10 +208,11 @@ async fn reject_command_action(
         status: AgentApprovalDecisionStatus::Rejected,
         message: rejected_message,
     });
-    input.messages.push(AgentChatMessage {
-        role: "user".to_string(),
-        content: build_rejected_command_result_observation(&tool_result),
-    });
+    input.tool_continuation = Some(tool_continuation_for_action(
+        &pending,
+        AgentApprovalStatus::Rejected,
+        tool_result.clone(),
+    )?);
 
     let agent_output = send_chat(input.clone())
         .await
@@ -191,17 +244,21 @@ async fn approve_diff_action(
     diff: AgentDiffProposal,
 ) -> Result<AgentActionExecutionOutput, String> {
     let workspace_root = workspace_root(&pending.input);
+    let permissions = policy_from_input(&pending.input);
     let execution = match workspace_root {
-        Ok(root) => apply_patch_and_read_diff(&root, &diff),
+        Ok(root) => apply_patch_and_read_diff(&root, &diff, permissions),
         Err(error) => PatchExecution {
             status: AgentActionExecutionStatus::Failed,
             observation_ok: false,
-            result: AgentPatchExecutionResult {
+            result: AgentPatchResult {
+                status: AgentPatchResultStatus::Failed,
+                operation: diff.operation,
                 file_path: diff.file_path.clone(),
                 applied_file_paths: Vec::new(),
                 git_diff: None,
                 git_diff_error: None,
                 error: Some(error),
+                message: None,
             },
         },
     };
@@ -212,15 +269,16 @@ async fn approve_diff_action(
         status: AgentApprovalDecisionStatus::Approved,
         message: Some("用户批准应用 patch。".to_string()),
     });
-    input.messages.push(AgentChatMessage {
-        role: "user".to_string(),
-        content: build_tool_result_observation(
-            &pending.tool_name,
-            &pending.action_id,
-            execution.observation_ok,
-            &execution.result,
-        ),
-    });
+    let tool_result = patch_tool_result(
+        &pending.action_id,
+        execution.observation_ok,
+        &execution.result,
+    );
+    input.tool_continuation = Some(tool_continuation_for_action(
+        &pending,
+        AgentApprovalStatus::Approved,
+        tool_result.clone(),
+    )?);
 
     let agent_output = send_chat(input.clone())
         .await
@@ -240,7 +298,7 @@ async fn approve_diff_action(
         status: execution.status,
         patch_result: Some(execution.result),
         command_result: None,
-        tool_result: None,
+        tool_result: Some(tool_result),
         agent_output,
     })
 }
@@ -253,10 +311,18 @@ async fn approve_command_action(
     command: AgentCommandRequest,
 ) -> Result<AgentActionExecutionOutput, String> {
     let workspace_root = workspace_root(&pending.input);
+    let permissions = policy_from_input(&pending.input);
     let execution = match workspace_root {
         Ok(root) => {
             let guard = command_state.register(&pending.action_id);
-            run_command_and_capture(&root, &command, Some(guard.cancel_flag()))
+            run_command_and_capture(
+                &root,
+                &command,
+                permissions,
+                AgentCancellationToken::new(),
+                Some(guard.cancel_flag()),
+                false,
+            )
         }
         Err(error) => CommandExecution {
             status: AgentActionExecutionStatus::Failed,
@@ -283,21 +349,17 @@ async fn approve_command_action(
         status: AgentApprovalDecisionStatus::Approved,
         message: Some("用户批准运行命令。".to_string()),
     });
-    input.messages.push(AgentChatMessage {
-        role: "user".to_string(),
-        content: build_command_result_observation(
-            &pending.tool_name,
-            &pending.action_id,
-            execution.observation_ok,
-            &execution.result,
-        ),
-    });
     let tool_result = command_tool_result(
         &pending.action_id,
         pending.tool_name.as_str(),
         execution.observation_ok,
         &execution.result,
     );
+    input.tool_continuation = Some(tool_continuation_for_action(
+        &pending,
+        AgentApprovalStatus::Approved,
+        tool_result.clone(),
+    )?);
 
     let agent_output = send_chat(input.clone())
         .await
@@ -325,13 +387,34 @@ async fn approve_command_action(
 struct PatchExecution {
     status: AgentActionExecutionStatus,
     observation_ok: bool,
-    result: AgentPatchExecutionResult,
+    result: AgentPatchResult,
 }
 
 struct CommandExecution {
     status: AgentActionExecutionStatus,
     observation_ok: bool,
     result: AgentCommandExecutionResult,
+}
+
+fn patch_tool_result(
+    action_id: &str,
+    observation_ok: bool,
+    patch_result: &AgentPatchResult,
+) -> AgentToolResult {
+    AgentToolResult {
+        call_id: action_id.to_string(),
+        tool: "apply_patch".to_string(),
+        ok: observation_ok,
+        result: Some(json!(patch_result)),
+        error: if observation_ok {
+            None
+        } else {
+            patch_result
+                .error
+                .clone()
+                .or_else(|| Some("应用 patch 失败。".to_string()))
+        },
+    }
 }
 
 fn command_tool_result(
@@ -388,18 +471,76 @@ fn rejected_command_tool_result(
     }
 }
 
-fn apply_patch_and_read_diff(root: &PathBuf, diff: &AgentDiffProposal) -> PatchExecution {
-    match apply_unified_diff(root, &diff.file_path, &diff.patch) {
+fn tool_continuation_for_action(
+    pending: &PendingAgentAction,
+    approval_status: AgentApprovalStatus,
+    result: AgentToolResult,
+) -> Result<AgentToolContinuation, String> {
+    let call = match &pending.action {
+        AgentProposedAction::Diff { diff } => AgentToolCall {
+            id: pending.action_id.clone(),
+            tool: "apply_patch".to_string(),
+            args: json!({
+                "operation": diff.operation,
+                "filePath": diff.file_path,
+                "patch": diff.patch,
+                "expectedRevision": diff.base_revision,
+                "summary": diff.summary,
+            }),
+            approval_status,
+            reason: diff.summary.clone(),
+        },
+        AgentProposedAction::Command { command } => AgentToolCall {
+            id: pending.action_id.clone(),
+            tool: "run_command".to_string(),
+            args: json!({
+                "command": command.command,
+                "cwd": command.cwd,
+                "timeoutMs": command.timeout_ms,
+                "reason": command.reason,
+                "riskLevel": command.risk_level,
+            }),
+            approval_status,
+            reason: command.reason.clone(),
+        },
+        AgentProposedAction::ToolCall { call } => {
+            let mut call = call.clone();
+            call.approval_status = approval_status;
+            call
+        }
+    };
+    if result.call_id != call.id {
+        return Err("tool continuation 的 callId 与 pending action 不匹配。".to_string());
+    }
+    Ok(AgentToolContinuation { call, result })
+}
+
+fn apply_patch_and_read_diff(
+    root: &PathBuf,
+    diff: &AgentDiffProposal,
+    permissions: AgentPermissions,
+) -> PatchExecution {
+    match apply_unified_diff(
+        root,
+        diff.operation,
+        &diff.file_path,
+        &diff.patch,
+        diff.base_revision.as_deref(),
+        permissions,
+    ) {
         Ok(apply_result) => successful_patch_execution(root, diff, apply_result),
         Err(error) => PatchExecution {
             status: AgentActionExecutionStatus::Failed,
             observation_ok: false,
-            result: AgentPatchExecutionResult {
+            result: AgentPatchResult {
+                status: AgentPatchResultStatus::Failed,
+                operation: diff.operation,
                 file_path: diff.file_path.clone(),
                 applied_file_paths: Vec::new(),
                 git_diff: None,
                 git_diff_error: None,
                 error: Some(error),
+                message: None,
             },
         },
     }
@@ -410,20 +551,29 @@ fn successful_patch_execution(
     diff: &AgentDiffProposal,
     apply_result: PatchApplyResult,
 ) -> PatchExecution {
-    let (git_diff, git_diff_error) = match read_git_diff(root, Some(&diff.file_path)) {
-        Ok(git_diff) => (Some(git_diff), None),
-        Err(error) => (None, Some(error)),
+    let (git_diff, git_diff_error) = if PathBuf::from(&diff.file_path).is_absolute()
+        && !PathBuf::from(&diff.file_path).starts_with(root)
+    {
+        (None, None)
+    } else {
+        match read_git_diff(root, Some(&diff.file_path)) {
+            Ok(git_diff) => (Some(git_diff), None),
+            Err(error) => (None, Some(error)),
+        }
     };
 
     PatchExecution {
         status: AgentActionExecutionStatus::Applied,
         observation_ok: true,
-        result: AgentPatchExecutionResult {
+        result: AgentPatchResult {
+            status: AgentPatchResultStatus::Applied,
+            operation: diff.operation,
             file_path: diff.file_path.clone(),
             applied_file_paths: apply_result.file_paths,
             git_diff,
             git_diff_error,
             error: None,
+            message: None,
         },
     }
 }
@@ -431,9 +581,19 @@ fn successful_patch_execution(
 fn run_command_and_capture(
     root: &PathBuf,
     command: &AgentCommandRequest,
-    cancel_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    permissions: AgentPermissions,
+    cancellation_token: AgentCancellationToken,
+    action_cancel_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    automatic: bool,
 ) -> CommandExecution {
-    match run_approved_command(root, command, cancel_flag) {
+    match run_approved_command(
+        root,
+        command,
+        permissions,
+        cancellation_token,
+        action_cancel_flag,
+        automatic,
+    ) {
         Ok(result) => successful_command_execution(result),
         Err(error) => CommandExecution {
             status: AgentActionExecutionStatus::Failed,
@@ -453,6 +613,29 @@ fn run_command_and_capture(
             },
         },
     }
+}
+
+pub(crate) fn execute_auto_command_tool_action(
+    root: &PathBuf,
+    permissions: AgentPermissions,
+    command: &AgentCommandRequest,
+    cancellation_token: AgentCancellationToken,
+    action_cancel_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+) -> AgentToolResult {
+    let execution = run_command_and_capture(
+        root,
+        command,
+        permissions,
+        cancellation_token,
+        action_cancel_flag,
+        true,
+    );
+    command_tool_result(
+        &command.id,
+        "run_command",
+        execution.observation_ok,
+        &execution.result,
+    )
 }
 
 fn successful_command_execution(result: CommandExecutionResult) -> CommandExecution {
@@ -530,87 +713,50 @@ fn workspace_root(input: &AgentChatInput) -> Result<PathBuf, String> {
         .ok_or_else(|| "没有已选择的 workspace，无法应用 patch。".to_string())
 }
 
-fn build_tool_result_observation(
-    tool_name: &str,
-    action_id: &str,
-    ok: bool,
-    result: &AgentPatchExecutionResult,
-) -> String {
-    let payload = if ok {
-        json!({
-            "type": "tool_result",
-            "tool": tool_name,
-            "callId": action_id,
-            "ok": true,
-            "result": result
-        })
-    } else {
-        json!({
-            "type": "tool_result",
-            "tool": tool_name,
-            "callId": action_id,
-            "ok": false,
-            "error": result.error,
-            "result": result
-        })
-    };
-    let payload = serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string());
-
-    format!(
-        "Tool result observation from approved host action. Use this result to continue, repair the patch if needed, or summarize the applied change.\n```json\n{payload}\n```"
-    )
-}
-
-fn build_command_result_observation(
-    tool_name: &str,
-    action_id: &str,
-    ok: bool,
-    result: &AgentCommandExecutionResult,
-) -> String {
-    let payload = if ok {
-        json!({
-            "type": "tool_result",
-            "tool": tool_name,
-            "callId": action_id,
-            "ok": true,
-            "result": result
-        })
-    } else {
-        json!({
-            "type": "tool_result",
-            "tool": tool_name,
-            "callId": action_id,
-            "ok": false,
-            "error": result.error,
-            "result": result
-        })
-    };
-    let payload = serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string());
-
-    format!(
-        "Tool result observation from approved host command. Use stdout, stderr, exitCode, and timeout status to continue or repair.\n```json\n{payload}\n```"
-    )
-}
-
-fn build_rejected_command_result_observation(tool_result: &AgentToolResult) -> String {
-    let payload = json!({
-        "type": "tool_result",
-        "tool": tool_result.tool,
-        "callId": tool_result.call_id,
-        "ok": tool_result.ok,
-        "result": tool_result.result,
-        "error": tool_result.error,
-    });
-    let payload = serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string());
-
-    format!(
-        "Tool result observation from rejected host command. The user rejected this run_command request. Do not request the same command again unless the user explicitly changes their decision. Respect the rejection message and continue with an alternative approach or ask a different approval request if needed.\n```json\n{payload}\n```"
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn applied_patch_tool_result_stays_on_same_call() {
+        let patch_result = AgentPatchResult {
+            status: AgentPatchResultStatus::Applied,
+            operation: my_copilot_agent::AgentPatchOperation::Update,
+            file_path: "src/main.rs".to_string(),
+            applied_file_paths: vec!["src/main.rs".to_string()],
+            git_diff: None,
+            git_diff_error: None,
+            error: None,
+            message: None,
+        };
+        let result = patch_tool_result("patch-1", true, &patch_result);
+
+        assert_eq!(result.call_id, "patch-1");
+        assert_eq!(result.tool, "apply_patch");
+        assert!(result.ok);
+        assert_eq!(result.result.as_ref().unwrap()["status"], "applied");
+        assert_eq!(result.result.as_ref().unwrap()["operation"], "update");
+    }
+
+    #[test]
+    fn rejected_patch_tool_result_is_a_successful_lifecycle_result() {
+        let patch_result = AgentPatchResult {
+            status: AgentPatchResultStatus::Rejected,
+            operation: my_copilot_agent::AgentPatchOperation::Delete,
+            file_path: "obsolete.txt".to_string(),
+            applied_file_paths: Vec::new(),
+            git_diff: None,
+            git_diff_error: None,
+            error: None,
+            message: Some("保留这个文件。".to_string()),
+        };
+        let result = patch_tool_result("patch-2", true, &patch_result);
+
+        assert_eq!(result.call_id, "patch-2");
+        assert!(result.ok);
+        assert_eq!(result.result.as_ref().unwrap()["status"], "rejected");
+        assert_eq!(result.result.as_ref().unwrap()["message"], "保留这个文件。");
+    }
 
     #[test]
     fn command_tool_result_uses_run_command_call_id_and_result_payload() {
@@ -667,17 +813,4 @@ mod tests {
         assert!(result.error.is_none());
     }
 
-    #[test]
-    fn rejected_command_observation_tells_agent_to_continue_without_repeating() {
-        let result = rejected_command_tool_result(
-            "command-1",
-            None,
-            Some("换一种不用安装依赖的做法。".to_string()),
-        );
-        let observation = build_rejected_command_result_observation(&result);
-
-        assert!(observation.contains("rejected host command"));
-        assert!(observation.contains("Do not request the same command again"));
-        assert!(observation.contains("换一种不用安装依赖的做法"));
-    }
 }

@@ -1,6 +1,8 @@
+use crate::agent_actions::orchestrator::execute_auto_command_tool_action;
 use crate::agent_actions::pending::action_id;
 use crate::agent_actions::AgentActionState;
 use crate::fs::canonical_workspace_root;
+use crate::process::command_runner::CommandRunState;
 use crate::storage::models::{
     AgentPromptPreferencesRecord, AttachmentRecord, ChatConversationRecord,
     ChatMessageAttachmentRecord, ChatMessageRecord, ProjectRecord,
@@ -11,12 +13,13 @@ use crate::storage::{
 };
 use base64::Engine;
 use my_copilot_agent::{
-    next_run_id, send_chat_with_events_and_cancellation, AgentAttachmentLibraryContext,
+    next_run_id, send_chat_with_host_executor, AgentAttachmentLibraryContext,
     AgentAttachmentReference, AgentCancellationToken, AgentChatInput, AgentChatMessage,
-    AgentChatOutput, AgentEvent, AgentEventEmitter, AgentInputAttachment,
-    AgentInputAttachmentEncoding, AgentInputAttachmentKind, AgentPromptDetailLevel,
-    AgentPromptPreferences, AgentPromptTone, AgentPromptWorkMode, AgentRunContext, AgentRunMode,
-    AgentRunStatus, AgentSearchConfig, AgentSearchMode, AgentWorkspaceContext,
+    AgentChatOutput, AgentError, AgentEvent, AgentEventEmitter, AgentHostActionExecutor,
+    AgentInputAttachment, AgentInputAttachmentEncoding, AgentInputAttachmentKind, AgentPermissions,
+    AgentPromptDetailLevel, AgentPromptPreferences, AgentPromptTone, AgentPromptWorkMode,
+    AgentProposedAction, AgentRunContext, AgentRunMode, AgentRunStatus, AgentSearchConfig,
+    AgentSearchMode, AgentWorkspaceContext,
 };
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -76,6 +79,8 @@ pub struct AgentConversationTurnInput {
     pub temperature: Option<f32>,
     pub mode: Option<AgentRunMode>,
     pub prompt_preferences: Option<AgentPromptPreferences>,
+    #[serde(default)]
+    pub permissions: AgentPermissions,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -164,11 +169,13 @@ pub async fn agent_start_conversation_turn(
         });
 
         let runtime_cancellation_token = AgentCancellationToken::from_flag(cancel_flag.clone());
-        match send_chat_with_events_and_cancellation(
+        let host_executor = build_host_action_executor(app_handle.clone(), worker_input.clone());
+        match send_chat_with_host_executor(
             worker_input.clone(),
             worker_run_id.clone(),
             emitter,
             runtime_cancellation_token,
+            host_executor,
         )
         .await
         {
@@ -210,6 +217,41 @@ pub async fn agent_start_conversation_turn(
     });
 
     Ok(output)
+}
+
+fn build_host_action_executor(
+    app_handle: tauri::AppHandle,
+    input: AgentChatInput,
+) -> AgentHostActionExecutor {
+    Arc::new(move |action, cancellation_token| {
+        let AgentProposedAction::Command { command } = action else {
+            return Err(AgentError::new(
+                "当前 host executor 只支持自动执行 run_command。",
+            ));
+        };
+        let root = input
+            .context
+            .as_ref()
+            .and_then(|context| context.workspace.as_ref())
+            .and_then(|workspace| workspace.root_path.as_ref())
+            .map(PathBuf::from)
+            .ok_or_else(|| AgentError::new("没有已选择的 workspace，无法运行命令。"))?;
+        let permissions = input
+            .context
+            .as_ref()
+            .map(|context| context.permissions)
+            .unwrap_or_default();
+        let command_state = app_handle.state::<CommandRunState>();
+        let guard = command_state.register(&command.id);
+
+        Ok(execute_auto_command_tool_action(
+            &root,
+            permissions,
+            &command,
+            cancellation_token,
+            Some(guard.cancel_flag()),
+        ))
+    })
 }
 
 #[tauri::command]
@@ -396,6 +438,7 @@ fn prepare_conversation_turn(
                 root_path: project.path.clone(),
             }),
             attachment_library: Some(attachment_library),
+            permissions: input.permissions,
         }),
         search_config: Some(AgentSearchConfig {
             mode: match settings.search_mode.as_str() {
@@ -407,6 +450,7 @@ fn prepare_conversation_turn(
         }),
         prompt_preferences: Some(prompt_preferences),
         approval_decision: None,
+        tool_continuation: None,
         attachments: input.attachments,
         messages: agent_messages,
     };

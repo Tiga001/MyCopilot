@@ -1,6 +1,6 @@
 use super::{
-    relative_display, sanitize_limit, walk_workspace_with_cancellation, AgentTool,
-    ToolExecutionContext, WalkEntry, WalkResult, MAX_SEARCH_FILE_BYTES, MAX_SEARCH_LIMIT,
+    sanitize_limit, walk_workspace_with_cancellation, AgentTool, ToolExecutionContext, WalkEntry,
+    WalkResult, MAX_SEARCH_FILE_BYTES, MAX_SEARCH_LIMIT,
 };
 use crate::protocol::{AgentError, AgentResult, AgentToolDefinition, AgentToolSafety};
 use serde::Deserialize;
@@ -38,11 +38,10 @@ impl AgentTool for SearchCodeTool {
             return Err(AgentError::new("search_code.query 不能为空。"));
         }
 
-        let root = context.workspace_root()?;
         let cancellation_token = context.cancellation_token();
         let search_root = match args.path.as_deref().filter(|path| !path.trim().is_empty()) {
             Some(path) => context.resolve_existing_path(path)?,
-            None => root.clone(),
+            None => context.workspace_root()?,
         };
         let limit = sanitize_limit(args.limit);
         let case_sensitive = args.case_sensitive.unwrap_or(false);
@@ -92,7 +91,10 @@ impl AgentTool for SearchCodeTool {
                 }
 
                 matches.push(json!({
-                    "path": relative_display(&root, &entry.path),
+                    "path": context.display_path(
+                        args.path.as_deref().unwrap_or("."),
+                        &entry.path,
+                    )?,
                     "lineNumber": line_index + 1,
                     "line": line.trim()
                 }));
@@ -187,6 +189,7 @@ mod tests {
                     root_path: Some(self.root.to_string_lossy().to_string()),
                 }),
                 attachment_library: None,
+                permissions: Default::default(),
             }))
         }
     }

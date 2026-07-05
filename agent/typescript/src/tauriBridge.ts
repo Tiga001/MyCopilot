@@ -2,6 +2,7 @@ import type {
   AgentChatOutput,
   AgentConversationTurnInput,
   AgentConversationTurnOutput,
+  AgentPatchResult,
   AgentProposedAction,
   AgentToolResult,
   AgentUsageClearInput,
@@ -17,19 +18,6 @@ export interface AgentCommandInvoker {
 }
 
 export type AgentActionExecutionStatus = "applied" | "failed" | "rejected";
-
-export interface AgentGitDiffSnapshot {
-  patch: string;
-  truncated: boolean;
-}
-
-export interface AgentPatchExecutionResult {
-  filePath: string;
-  appliedFilePaths: string[];
-  gitDiff?: AgentGitDiffSnapshot;
-  gitDiffError?: string;
-  error?: string;
-}
 
 export interface AgentCommandExecutionResult {
   command: string;
@@ -50,7 +38,7 @@ export interface AgentActionExecutionOutput {
   actionType: string;
   toolName: string;
   status: AgentActionExecutionStatus;
-  patchResult?: AgentPatchExecutionResult;
+  patchResult?: AgentPatchResult;
   commandResult?: AgentCommandExecutionResult;
   toolResult?: AgentToolResult;
   agentOutput: AgentChatOutput;

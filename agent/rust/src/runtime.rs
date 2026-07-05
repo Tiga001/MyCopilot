@@ -6,11 +6,11 @@ use crate::llm::{
 use crate::prompts::build_system_prompt;
 use crate::protocol::{
     AgentApprovalDecision, AgentApprovalDecisionStatus, AgentApprovalStatus, AgentChatInput,
-    AgentChatMessage, AgentChatOutput, AgentError, AgentEvent, AgentInputAttachment,
-    AgentInputAttachmentEncoding, AgentInputAttachmentKind, AgentPromptPreferences,
-    AgentProposedAction, AgentResult, AgentRunContext, AgentRunMode, AgentRunStatus,
-    AgentStateSnapshot, AgentToolCall, AgentToolDefinition, AgentToolResult, AgentUsage,
-    AgentWorkspaceContext,
+    AgentChatMessage, AgentChatOutput, AgentCommandPermission, AgentError, AgentEvent,
+    AgentInputAttachment, AgentInputAttachmentEncoding, AgentInputAttachmentKind,
+    AgentPromptPreferences, AgentProposedAction, AgentResult, AgentRunContext, AgentRunStatus,
+    AgentStateSnapshot, AgentToolCall, AgentToolContinuation, AgentToolDefinition, AgentToolResult,
+    AgentUsage, AgentWorkspaceContext,
 };
 use crate::tools::{ToolExecutionContext, ToolRegistry};
 use crate::usage::merge_total_usage;
@@ -31,6 +31,12 @@ const MAX_TOOL_ITERATIONS: usize = 20;
 static RUN_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 pub type AgentEventEmitter = Arc<dyn Fn(AgentEvent) + Send + Sync + 'static>;
+pub type AgentHostActionExecutor = Arc<
+    dyn Fn(AgentProposedAction, AgentCancellationToken) -> AgentResult<AgentToolResult>
+        + Send
+        + Sync
+        + 'static,
+>;
 
 pub async fn send_chat(input: AgentChatInput) -> AgentResult<AgentChatOutput> {
     AgentRuntime::default().send_chat(input).await
@@ -57,6 +63,25 @@ pub async fn send_chat_with_events_and_cancellation(
             Some(run_id),
             Some(emitter),
             cancellation_token,
+            None,
+        )
+        .await
+}
+
+pub async fn send_chat_with_host_executor(
+    input: AgentChatInput,
+    run_id: String,
+    emitter: AgentEventEmitter,
+    cancellation_token: AgentCancellationToken,
+    host_executor: AgentHostActionExecutor,
+) -> AgentResult<AgentChatOutput> {
+    AgentRuntime::default()
+        .send_chat_with_events_and_cancellation(
+            input,
+            Some(run_id),
+            Some(emitter),
+            cancellation_token,
+            Some(host_executor),
         )
         .await
 }
@@ -93,6 +118,7 @@ impl AgentRuntime {
             run_id,
             emitter,
             AgentCancellationToken::new(),
+            None,
         )
         .await
     }
@@ -103,13 +129,30 @@ impl AgentRuntime {
         run_id: Option<String>,
         emitter: Option<AgentEventEmitter>,
         cancellation_token: AgentCancellationToken,
+        host_executor: Option<AgentHostActionExecutor>,
     ) -> AgentResult<AgentChatOutput> {
         let run_id = run_id.unwrap_or_else(generate_run_id);
         let context = input.context.clone();
         let tool_registry = Arc::new(ToolRegistry::read_only_defaults_with_search(
             input.search_config.as_ref(),
         ));
-        let tool_definitions = tool_registry.definitions();
+        let command_permission = context
+            .as_ref()
+            .map(|context| context.permissions.command)
+            .unwrap_or(AgentCommandPermission::RequireApproval);
+        let command_auto_approve =
+            command_permission == AgentCommandPermission::AutoApprove && host_executor.is_some();
+        let mut tool_definitions = tool_registry.definitions();
+        apply_permission_policy_to_tool_definitions(&mut tool_definitions, context.as_ref());
+        if command_auto_approve {
+            if let Some(definition) = tool_definitions
+                .iter_mut()
+                .find(|definition| definition.name == "run_command")
+            {
+                definition.requires_approval = false;
+                definition.description = "Run a validated shell command through the host execution layer. The current permission policy automatically approves this command request.".to_string();
+            }
+        }
         let mut event_stream = AgentEventStream::new(emitter);
         event_stream.emit(AgentEvent::Started {
             run_id: run_id.clone(),
@@ -243,15 +286,19 @@ impl AgentRuntime {
                 let tool_name = tool_request.name;
                 let tool_args = tool_request.args;
                 let reason = extract_reason_from_args(&tool_args);
-                let requires_approval = tool_registry
+                let definition_requires_approval = tool_registry
                     .definition_for(&tool_name)
                     .map(|definition| definition.requires_approval)
                     .unwrap_or(false);
+                let auto_execute_command = tool_name == "run_command" && command_auto_approve;
+                let requires_approval = definition_requires_approval && !auto_execute_command;
                 let call = AgentToolCall {
                     id: tool_request.id,
                     tool: tool_name,
                     args: tool_args,
-                    approval_status: if requires_approval {
+                    approval_status: if auto_execute_command {
+                        AgentApprovalStatus::Approved
+                    } else if requires_approval {
                         AgentApprovalStatus::Required
                     } else {
                         AgentApprovalStatus::NotRequired
@@ -273,7 +320,22 @@ impl AgentRuntime {
                 }
 
                 if requires_approval {
-                    let action = tool_registry.proposed_action(&call)?;
+                    let action = match tool_registry.proposed_action(&tool_context, &call) {
+                        Ok(action) => action,
+                        Err(error) => {
+                            let result = failed_tool_call_result(&call, error);
+                            event_stream.emit(AgentEvent::ToolResult {
+                                run_id: run_id.clone(),
+                                result: result.clone(),
+                            });
+                            messages.push(LlmMessage::tool_result(
+                                call.id.clone(),
+                                build_tool_observation_message(&result),
+                                true,
+                            ));
+                            continue;
+                        }
+                    };
                     if cancellation_token.is_cancelled() {
                         return Ok(cancelled_output(
                             run_id,
@@ -321,14 +383,32 @@ impl AgentRuntime {
                     });
                 }
 
-                let result = match execute_tool_on_blocking_thread(
-                    tool_registry.clone(),
-                    tool_context.clone(),
-                    call.clone(),
-                    cancellation_token.clone(),
-                )
-                .await
-                {
+                let result_result = if auto_execute_command {
+                    match tool_registry.proposed_action(&tool_context, &call) {
+                        Ok(action) => {
+                            let action = approve_proposed_action(action);
+                            execute_host_action_on_blocking_thread(
+                                host_executor
+                                    .as_ref()
+                                    .expect("auto command execution requires host executor")
+                                    .clone(),
+                                action,
+                                cancellation_token.clone(),
+                            )
+                            .await
+                        }
+                        Err(error) => Ok(failed_tool_call_result(&call, error)),
+                    }
+                } else {
+                    execute_tool_on_blocking_thread(
+                        tool_registry.clone(),
+                        tool_context.clone(),
+                        call.clone(),
+                        cancellation_token.clone(),
+                    )
+                    .await
+                };
+                let result = match result_result {
                     Ok(result) => result,
                     Err(error) if error.is_cancelled() => {
                         return Ok(cancelled_output(
@@ -450,15 +530,15 @@ fn build_llm_request(
     let api_style = input
         .api_style
         .unwrap_or_else(|| detect_api_style(input.api_url.trim()));
-    let mode = input.mode.unwrap_or(AgentRunMode::Chat);
     let attachment_context = build_attachment_context(&input.attachments)?;
+    let tool_continuation = input.tool_continuation.clone();
     let messages = build_runtime_messages(
         input.messages,
         attachment_context,
-        mode,
         input.context.as_ref(),
         input.prompt_preferences.as_ref(),
         input.approval_decision.as_ref(),
+        tool_continuation.as_ref(),
         tool_definitions,
     )?;
 
@@ -475,13 +555,92 @@ fn build_llm_request(
     })
 }
 
+fn apply_permission_policy_to_tool_definitions(
+    definitions: &mut Vec<AgentToolDefinition>,
+    context: Option<&AgentRunContext>,
+) {
+    let permissions = context
+        .map(|context| context.permissions)
+        .unwrap_or_default();
+
+    if permissions.write == crate::protocol::AgentWritePermission::Denied {
+        definitions.retain(|definition| definition.name != "apply_patch");
+    }
+
+    if permissions.read == crate::protocol::AgentReadPermission::All {
+        for definition in definitions.iter_mut() {
+            match definition.name.as_str() {
+                "read_file" | "read_image" | "read_pdf" | "read_word" | "read_presentation"
+                | "read_spreadsheet" => {
+                    set_schema_property_description(
+                        &mut definition.input_schema,
+                        "path",
+                        "Workspace-relative path, absolute local path, or @attachments readPath.",
+                    );
+                }
+                "search_code" => set_schema_property_description(
+                    &mut definition.input_schema,
+                    "path",
+                    "Optional workspace-relative or absolute directory/file path to search.",
+                ),
+                "search_files" => set_schema_property_description(
+                    &mut definition.input_schema,
+                    "path",
+                    "Optional workspace-relative or absolute directory path to search.",
+                ),
+                "workspace_map" => set_schema_property_description(
+                    &mut definition.input_schema,
+                    "focusPath",
+                    "Optional workspace-relative or absolute directory to summarize.",
+                ),
+                _ => {}
+            }
+        }
+    }
+
+    if permissions.write == crate::protocol::AgentWritePermission::All {
+        for definition in definitions
+            .iter_mut()
+            .filter(|definition| definition.name == "apply_patch")
+        {
+            definition.description = "Create, update, or delete one text/code/config file through structured content or edits; Rust generates the unified diff. The target may be workspace-relative or an absolute local path. This is the required file-writing path; do not use run_command to write files. Applying the generated diff still requires host approval.".to_string();
+            set_schema_property_description(
+                &mut definition.input_schema,
+                "filePath",
+                "Workspace-relative or absolute local file path to modify or create.",
+            );
+        }
+        if let Some(definition) = definitions
+            .iter_mut()
+            .find(|definition| definition.name == "run_command")
+        {
+            set_schema_property_description(
+                &mut definition.input_schema,
+                "cwd",
+                "Optional workspace-relative or absolute working directory.",
+            );
+        }
+    }
+}
+
+fn set_schema_property_description(schema: &mut Value, property: &str, description: &str) {
+    if let Some(property_schema) = schema
+        .get_mut("properties")
+        .and_then(Value::as_object_mut)
+        .and_then(|properties| properties.get_mut(property))
+        .and_then(Value::as_object_mut)
+    {
+        property_schema.insert("description".to_string(), json!(description));
+    }
+}
+
 fn build_runtime_messages(
     messages: Vec<AgentChatMessage>,
     attachment_context: AttachmentContext,
-    mode: AgentRunMode,
     context: Option<&AgentRunContext>,
     prompt_preferences: Option<&AgentPromptPreferences>,
     approval_decision: Option<&AgentApprovalDecision>,
+    tool_continuation: Option<&AgentToolContinuation>,
     tool_definitions: &[AgentToolDefinition],
 ) -> AgentResult<Vec<LlmMessage>> {
     let mut normalized = normalize_messages(messages)?;
@@ -495,11 +654,13 @@ fn build_runtime_messages(
         return Err(AgentError::new("对话里缺少用户或助手消息。"));
     }
 
-    if let Some(approval_decision) = approval_decision {
-        normalized.push(AgentChatMessage {
-            role: "user".to_string(),
-            content: build_approval_decision_observation(approval_decision),
-        });
+    if tool_continuation.is_none() {
+        if let Some(approval_decision) = approval_decision {
+            normalized.push(AgentChatMessage {
+                role: "user".to_string(),
+                content: build_approval_decision_observation(approval_decision),
+            });
+        }
     }
 
     let mut runtime_messages = normalized
@@ -508,11 +669,27 @@ fn build_runtime_messages(
         .collect::<AgentResult<Vec<_>>>()?;
     attach_images_to_last_user_message(&mut runtime_messages, attachment_context.images);
 
+    if let Some(continuation) = tool_continuation {
+        runtime_messages.push(LlmMessage::assistant(
+            "",
+            vec![LlmToolCall {
+                id: continuation.call.id.clone(),
+                name: continuation.call.tool.clone(),
+                args: continuation.call.args.clone(),
+            }],
+        ));
+        runtime_messages.push(LlmMessage::tool_result(
+            continuation.call.id.clone(),
+            build_tool_observation_message(&continuation.result),
+            !continuation.result.ok,
+        ));
+    }
+
     runtime_messages.insert(
         0,
         LlmMessage::text(
             LlmMessageRole::System,
-            build_system_prompt(mode, context, prompt_preferences, tool_definitions),
+            build_system_prompt(context, prompt_preferences, tool_definitions),
         ),
     );
 
@@ -599,6 +776,7 @@ fn build_attachment_context_in_workspace(
             root_path: Some(temp_root.to_string_lossy().to_string()),
         }),
         attachment_library: None,
+        permissions: Default::default(),
     }));
     let mut sections = Vec::new();
     let mut images = Vec::new();
@@ -1052,6 +1230,47 @@ async fn execute_tool_on_blocking_thread(
     }
 }
 
+async fn execute_host_action_on_blocking_thread(
+    executor: AgentHostActionExecutor,
+    action: AgentProposedAction,
+    cancellation_token: AgentCancellationToken,
+) -> AgentResult<AgentToolResult> {
+    let execution_token = cancellation_token.clone();
+    let handle = tokio::task::spawn_blocking(move || executor(action, execution_token));
+    tokio::select! {
+        _ = cancellation_token.cancelled() => Err(AgentError::cancelled()),
+        result = handle => {
+            result
+                .map_err(|error| AgentError::new(format!("host 执行线程失败：{error}")))?
+        }
+    }
+}
+
+fn approve_proposed_action(mut action: AgentProposedAction) -> AgentProposedAction {
+    match &mut action {
+        AgentProposedAction::Command { command } => {
+            command.approval_status = AgentApprovalStatus::Approved;
+        }
+        AgentProposedAction::Diff { diff } => {
+            diff.approval_status = AgentApprovalStatus::Approved;
+        }
+        AgentProposedAction::ToolCall { call } => {
+            call.approval_status = AgentApprovalStatus::Approved;
+        }
+    }
+    action
+}
+
+fn failed_tool_call_result(call: &AgentToolCall, error: AgentError) -> AgentToolResult {
+    AgentToolResult {
+        call_id: call.id.clone(),
+        tool: call.tool.clone(),
+        ok: false,
+        result: None,
+        error: Some(error.to_string()),
+    }
+}
+
 fn redact_tool_result_for_event(result: &AgentToolResult) -> AgentToolResult {
     let mut redacted = result.clone();
     if let Some(value) = redacted.result.as_mut() {
@@ -1285,12 +1504,13 @@ mod tests {
                 root_path: Some("/private/path".to_string()),
             }),
             attachment_library: None,
+            permissions: Default::default(),
         };
         let messages = build_runtime_messages(
             vec![message("user", "Read src/main.rs")],
             empty_attachment_context(),
-            AgentRunMode::Chat,
             Some(&context),
+            None,
             None,
             None,
             &ToolRegistry::read_only_defaults_with_search(None).definitions(),
@@ -1313,10 +1533,10 @@ mod tests {
         let messages = build_runtime_messages(
             vec![message("user", "Run pnpm install")],
             empty_attachment_context(),
-            AgentRunMode::Chat,
             None,
             None,
             Some(&decision),
+            None,
             &ToolRegistry::read_only_defaults_with_search(None).definitions(),
         )
         .unwrap();
@@ -1336,7 +1556,7 @@ mod tests {
                     .to_string(),
                 images: Vec::new(),
             },
-            AgentRunMode::Chat,
+            None,
             None,
             None,
             None,
@@ -1348,6 +1568,54 @@ mod tests {
             .iter()
             .any(|message| message.role == LlmMessageRole::User
                 && message.content.contains("hello from attachment")));
+    }
+
+    #[test]
+    fn runtime_messages_resume_with_native_tool_call_and_result() {
+        let continuation = AgentToolContinuation {
+            call: AgentToolCall {
+                id: "patch-1".to_string(),
+                tool: "apply_patch".to_string(),
+                args: json!({
+                    "operation": "update",
+                    "filePath": "src/main.rs",
+                    "edits": [{ "kind": "append", "text": "\nfn test() {}\n" }]
+                }),
+                approval_status: AgentApprovalStatus::Approved,
+                reason: None,
+            },
+            result: AgentToolResult {
+                call_id: "patch-1".to_string(),
+                tool: "apply_patch".to_string(),
+                ok: false,
+                result: None,
+                error: Some("stale_file".to_string()),
+            },
+        };
+        let messages = build_runtime_messages(
+            vec![message("user", "Edit src/main.rs")],
+            empty_attachment_context(),
+            None,
+            None,
+            None,
+            Some(&continuation),
+            &ToolRegistry::read_only_defaults_with_search(None).definitions(),
+        )
+        .unwrap();
+
+        let assistant = messages
+            .iter()
+            .find(|message| !message.tool_calls.is_empty())
+            .unwrap();
+        assert_eq!(assistant.role, LlmMessageRole::Assistant);
+        assert_eq!(assistant.tool_calls[0].id, "patch-1");
+        let result = messages
+            .iter()
+            .find(|message| message.role == LlmMessageRole::Tool)
+            .unwrap();
+        assert_eq!(result.tool_call_id.as_deref(), Some("patch-1"));
+        assert!(result.is_error);
+        assert!(result.content.contains("stale_file"));
     }
 
     #[test]

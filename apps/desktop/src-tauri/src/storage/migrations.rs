@@ -185,6 +185,24 @@ pub fn run_migrations(connection: &Connection) -> rusqlite::Result<()> {
         "profile_avatar_data_url",
         "TEXT",
     )?;
+    add_column_if_missing(
+        connection,
+        "ui_preferences",
+        "custom_read_permission",
+        "TEXT NOT NULL DEFAULT 'workspace_only'",
+    )?;
+    add_column_if_missing(
+        connection,
+        "ui_preferences",
+        "custom_write_permission",
+        "TEXT NOT NULL DEFAULT 'workspace_only'",
+    )?;
+    add_column_if_missing(
+        connection,
+        "ui_preferences",
+        "custom_command_permission",
+        "TEXT NOT NULL DEFAULT 'require_approval'",
+    )?;
 
     connection.execute_batch(
         "

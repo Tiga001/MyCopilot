@@ -1,5 +1,9 @@
 use crate::fs::{canonical_workspace_root, clean_relative_path, relative_display};
-use my_copilot_agent::{AgentCommandRequest, AgentCommandRiskLevel};
+use crate::permissions::require_command_execution;
+use my_copilot_agent::{
+    AgentCancellationToken, AgentCommandRequest, AgentCommandRiskLevel, AgentPermissions,
+    AgentWritePermission,
+};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -93,15 +97,24 @@ impl Drop for CommandRunGuard<'_> {
 pub fn run_approved_command(
     workspace_root: &Path,
     request: &AgentCommandRequest,
-    cancel_flag: Option<Arc<AtomicBool>>,
+    permissions: AgentPermissions,
+    cancellation_token: AgentCancellationToken,
+    action_cancel_flag: Option<Arc<AtomicBool>>,
+    automatic: bool,
 ) -> Result<CommandExecutionResult, String> {
     let root = canonical_workspace_root(workspace_root)?;
-    let cwd = resolve_command_cwd(&root, request.cwd.as_deref())?;
+    let risk_level = request.risk_level.unwrap_or(AgentCommandRiskLevel::Unknown);
+    require_command_execution(permissions, risk_level, automatic)?;
+    let cwd = resolve_command_cwd(&root, request.cwd.as_deref(), permissions.write)?;
     validate_command_request(request)?;
-    run_shell_command(&cwd, &root, request, cancel_flag)
+    run_shell_command(&cwd, &root, request, cancellation_token, action_cancel_flag)
 }
 
-fn resolve_command_cwd(root: &Path, cwd: Option<&str>) -> Result<PathBuf, String> {
+fn resolve_command_cwd(
+    root: &Path,
+    cwd: Option<&str>,
+    write_permission: AgentWritePermission,
+) -> Result<PathBuf, String> {
     let root = canonical_workspace_root(root)?;
     let Some(cwd) = cwd
         .map(str::trim)
@@ -109,13 +122,20 @@ fn resolve_command_cwd(root: &Path, cwd: Option<&str>) -> Result<PathBuf, String
     else {
         return Ok(root);
     };
-    let relative = clean_relative_path(cwd)?;
-    let resolved = root.join(relative);
+    let cwd_path = Path::new(cwd);
+    let resolved = if cwd_path.is_absolute() {
+        if write_permission != AgentWritePermission::All {
+            return Err("命令在 workspace 外运行需要 write=all 权限。".to_string());
+        }
+        cwd_path.to_path_buf()
+    } else {
+        root.join(clean_relative_path(cwd)?)
+    };
     let canonical = resolved
         .canonicalize()
         .map_err(|error| format!("命令工作目录不可访问：{error}"))?;
 
-    if !canonical.starts_with(&root) {
+    if !canonical.starts_with(&root) && write_permission != AgentWritePermission::All {
         return Err("命令工作目录必须位于已选择的 workspace 内。".to_string());
     }
     if !canonical.is_dir() {
@@ -189,7 +209,8 @@ fn run_shell_command(
     cwd: &Path,
     root: &Path,
     request: &AgentCommandRequest,
-    cancel_flag: Option<Arc<AtomicBool>>,
+    cancellation_token: AgentCancellationToken,
+    action_cancel_flag: Option<Arc<AtomicBool>>,
 ) -> Result<CommandExecutionResult, String> {
     let timeout_ms = request
         .timeout_ms
@@ -210,10 +231,11 @@ fn run_shell_command(
     let mut timed_out = false;
     let mut cancelled = false;
     loop {
-        if cancel_flag
-            .as_ref()
-            .map(|cancel_flag| cancel_flag.load(Ordering::SeqCst))
-            .unwrap_or(false)
+        if cancellation_token.is_cancelled()
+            || action_cancel_flag
+                .as_ref()
+                .map(|cancel_flag| cancel_flag.load(Ordering::SeqCst))
+                .unwrap_or(false)
         {
             cancelled = true;
             let _ = child.kill();
@@ -255,11 +277,17 @@ fn run_shell_command(
 }
 
 fn relative_cwd(root: &Path, cwd: &Path) -> String {
-    cwd.strip_prefix(root)
-        .map(relative_display)
-        .ok()
-        .filter(|path| !path.is_empty())
-        .unwrap_or_else(|| ".".to_string())
+    match cwd.strip_prefix(root) {
+        Ok(relative) => {
+            let display = relative_display(relative);
+            if display.is_empty() {
+                ".".to_string()
+            } else {
+                display
+            }
+        }
+        Err(_) => cwd.to_string_lossy().to_string(),
+    }
 }
 
 fn truncate_output(output: &[u8]) -> (String, bool) {
@@ -279,7 +307,7 @@ fn truncate_output(output: &[u8]) -> (String, bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use my_copilot_agent::AgentApprovalStatus;
+    use my_copilot_agent::{AgentApprovalStatus, AgentPermissions};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -288,7 +316,12 @@ mod tests {
     fn resolves_cwd_inside_workspace() {
         let workspace = TestWorkspace::new();
         std::fs::create_dir_all(workspace.path.join("agent/rust")).unwrap();
-        let cwd = resolve_command_cwd(&workspace.path, Some("agent/rust")).unwrap();
+        let cwd = resolve_command_cwd(
+            &workspace.path,
+            Some("agent/rust"),
+            AgentWritePermission::WorkspaceOnly,
+        )
+        .unwrap();
 
         assert!(cwd.ends_with("agent/rust"));
     }
@@ -296,7 +329,12 @@ mod tests {
     #[test]
     fn rejects_cwd_outside_workspace() {
         let workspace = TestWorkspace::new();
-        let error = resolve_command_cwd(&workspace.path, Some("../outside")).unwrap_err();
+        let error = resolve_command_cwd(
+            &workspace.path,
+            Some("../outside"),
+            AgentWritePermission::WorkspaceOnly,
+        )
+        .unwrap_err();
 
         assert!(error.contains("路径不能包含"));
     }
@@ -336,7 +374,13 @@ mod tests {
                 risk_level: Some(AgentCommandRiskLevel::ReadOnly),
                 reason: None,
             },
+            AgentPermissions {
+                write: AgentWritePermission::WorkspaceOnly,
+                ..Default::default()
+            },
+            AgentCancellationToken::new(),
             None,
+            false,
         )
         .unwrap();
 

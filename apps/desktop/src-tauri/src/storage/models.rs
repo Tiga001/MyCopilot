@@ -1,3 +1,4 @@
+use my_copilot_agent::AgentPermissions;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -139,6 +140,7 @@ pub struct UiPreferencesRecord {
     pub native_font_smoothing: bool,
     pub show_token_usage_details: bool,
     pub translucent_sidebar: bool,
+    pub custom_permissions: AgentPermissions,
     pub updated_at: i64,
 }
 

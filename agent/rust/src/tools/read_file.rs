@@ -2,6 +2,7 @@ use super::{
     AgentTool, ToolExecutionContext, DEFAULT_READ_MAX_LINES, MAX_READ_FILE_BYTES, MAX_READ_LINES,
 };
 use crate::protocol::{AgentError, AgentResult, AgentToolDefinition, AgentToolSafety};
+use crate::revision::content_revision;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::fs;
@@ -69,6 +70,7 @@ impl AgentTool for ReadFileTool {
 
         Ok(json!({
             "path": context.display_path(path, &file_path)?,
+            "revision": content_revision(content.as_bytes()),
             "startLine": start_index + 1,
             "endLine": end_index,
             "totalLines": total_lines,
@@ -128,7 +130,9 @@ mod tests {
         let result = registry.execute(&context, &call);
 
         assert!(result.ok, "{:?}", result.error);
-        assert_eq!(result.result.unwrap()["content"], "two");
+        let value = result.result.unwrap();
+        assert_eq!(value["content"], "two");
+        assert!(value["revision"].as_str().unwrap().starts_with("v1-"));
     }
 
     struct TestWorkspace {
@@ -161,6 +165,7 @@ mod tests {
                     root_path: Some(self.root.to_string_lossy().to_string()),
                 }),
                 attachment_library: None,
+                permissions: Default::default(),
             }))
         }
     }

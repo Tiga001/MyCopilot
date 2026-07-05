@@ -124,7 +124,7 @@ function SettingsContent({
     );
   }
 
-  return <GeneralSettingsPage />;
+  return <GeneralSettingsPage uiPreferences={uiPreferences} onUiPreferencesChange={onUiPreferencesChange} />;
 }
 
 interface SettingsNavigationProps {

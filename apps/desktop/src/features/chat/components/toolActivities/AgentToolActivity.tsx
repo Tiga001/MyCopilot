@@ -1,7 +1,8 @@
-import type { AgentToolCall, AgentToolResult } from "@agent";
+import type { AgentDiffProposal, AgentToolCall, AgentToolResult } from "@agent";
 import type { ChatReadActivity, ChatWebSearchActivity } from "../../chatTypes";
 import { isReadActivityTool } from "../../agentReadActivities";
 import { AttachmentListToolActivity } from "./AttachmentListToolActivity";
+import { ApplyPatchToolActivity } from "./ApplyPatchToolActivity";
 import { GenericToolActivity } from "./GenericToolActivity";
 import { GitDiffToolActivity } from "./GitDiffToolActivity";
 import { ReadToolActivity } from "./ReadToolActivity";
@@ -15,6 +16,7 @@ interface AgentToolActivityProps {
   readActivity?: ChatReadActivity;
   webActivity?: ChatWebSearchActivity;
   call: AgentToolCall;
+  diff?: AgentDiffProposal;
   result?: AgentToolResult;
 }
 
@@ -23,6 +25,7 @@ export function AgentToolActivity({
   readActivity,
   webActivity,
   call,
+  diff,
   result,
 }: AgentToolActivityProps) {
   if (call.tool === "attachments_list" || call.tool === "attachments_list_project") {
@@ -51,6 +54,17 @@ export function AgentToolActivity({
 
   if (call.tool === "run_command") {
     return <RunCommandToolActivity cancelled={cancelled && !result} call={call} result={result} />;
+  }
+
+  if (call.tool === "apply_patch") {
+    return (
+      <ApplyPatchToolActivity
+        cancelled={cancelled && !result}
+        call={call}
+        diff={diff}
+        result={result}
+      />
+    );
   }
 
   return <GenericToolActivity cancelled={cancelled && !result} call={call} result={result} />;

@@ -1,6 +1,6 @@
 use super::{
-    relative_display, sanitize_limit, walk_workspace_with_cancellation, AgentTool,
-    ToolExecutionContext, MAX_SEARCH_LIMIT,
+    sanitize_limit, walk_workspace_with_cancellation, AgentTool, ToolExecutionContext,
+    MAX_SEARCH_LIMIT,
 };
 use crate::protocol::{AgentError, AgentResult, AgentToolDefinition, AgentToolSafety};
 use serde::Deserialize;
@@ -18,6 +18,7 @@ impl AgentTool for SearchFilesTool {
                 "type": "object",
                 "properties": {
                     "query": { "type": "string", "description": "Case-insensitive path or file-name substring." },
+                    "path": { "type": "string", "description": "Optional workspace-relative directory to search. Defaults to workspace root." },
                     "limit": { "type": "integer", "minimum": 1, "maximum": MAX_SEARCH_LIMIT }
                 },
                 "required": ["query"]
@@ -37,7 +38,13 @@ impl AgentTool for SearchFilesTool {
         }
 
         let limit = sanitize_limit(args.limit);
-        let root = context.workspace_root()?;
+        let root = match args.path.as_deref().filter(|path| !path.trim().is_empty()) {
+            Some(path) => context.resolve_existing_path(path)?,
+            None => context.workspace_root()?,
+        };
+        if !root.is_dir() {
+            return Err(AgentError::new("search_files.path 必须是目录。"));
+        }
         let needle = query.to_ascii_lowercase();
         let mut matches = Vec::new();
         let cancellation_token = context.cancellation_token();
@@ -45,13 +52,14 @@ impl AgentTool for SearchFilesTool {
 
         for entry in walk.entries {
             cancellation_token.check()?;
-            let relative = relative_display(&root, &entry.path);
-            if !relative.to_ascii_lowercase().contains(&needle) {
+            let display_path =
+                context.display_path(args.path.as_deref().unwrap_or("."), &entry.path)?;
+            if !display_path.to_ascii_lowercase().contains(&needle) {
                 continue;
             }
 
             matches.push(json!({
-                "path": relative,
+                "path": display_path,
                 "kind": if entry.is_dir { "directory" } else { "file" },
                 "sizeBytes": entry.size_bytes
             }));
@@ -73,6 +81,7 @@ impl AgentTool for SearchFilesTool {
 #[serde(rename_all = "camelCase")]
 struct SearchFilesArgs {
     query: String,
+    path: Option<String>,
     limit: Option<usize>,
 }
 
@@ -140,6 +149,7 @@ mod tests {
                     root_path: Some(self.root.to_string_lossy().to_string()),
                 }),
                 attachment_library: None,
+                permissions: Default::default(),
             }))
         }
     }

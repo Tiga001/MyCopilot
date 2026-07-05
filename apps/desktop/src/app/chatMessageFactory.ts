@@ -68,7 +68,10 @@ export function createComposerDraft(
   return {
     ...draft,
     modelId: draft.modelId || modelConfig.defaults.selectedModelId,
-    permissionMode: draft.permissionMode === "default" ? "default" : "full",
+    permissionMode:
+      draft.permissionMode === "default" || draft.permissionMode === "custom"
+        ? draft.permissionMode
+        : "full",
     attachments: draft.attachments ?? [],
   };
 }

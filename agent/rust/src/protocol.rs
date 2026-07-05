@@ -19,6 +19,8 @@ pub struct AgentChatInput {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_preferences: Option<AgentPromptPreferences>,
     pub approval_decision: Option<AgentApprovalDecision>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_continuation: Option<AgentToolContinuation>,
     #[serde(default)]
     pub attachments: Vec<AgentInputAttachment>,
     pub messages: Vec<AgentChatMessage>,
@@ -28,6 +30,13 @@ pub struct AgentChatInput {
 pub struct AgentChatMessage {
     pub role: String,
     pub content: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentToolContinuation {
+    pub call: AgentToolCall,
+    pub result: AgentToolResult,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
@@ -110,6 +119,46 @@ pub enum AgentSearchMode {
 
 #[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum AgentReadPermission {
+    WorkspaceOnly,
+    All,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentWritePermission {
+    Denied,
+    WorkspaceOnly,
+    All,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentCommandPermission {
+    RequireApproval,
+    AutoApprove,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentPermissions {
+    pub read: AgentReadPermission,
+    pub write: AgentWritePermission,
+    pub command: AgentCommandPermission,
+}
+
+impl Default for AgentPermissions {
+    fn default() -> Self {
+        Self {
+            read: AgentReadPermission::WorkspaceOnly,
+            write: AgentWritePermission::Denied,
+            command: AgentCommandPermission::RequireApproval,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum AgentPromptWorkMode {
     Coding,
     General,
@@ -170,6 +219,8 @@ pub struct AgentRunContext {
     pub workspace: Option<AgentWorkspaceContext>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attachment_library: Option<AgentAttachmentLibraryContext>,
+    #[serde(default)]
+    pub permissions: AgentPermissions,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -334,6 +385,22 @@ pub enum AgentApprovalDecisionStatus {
 
 #[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum AgentPatchOperation {
+    Create,
+    Update,
+    Delete,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentPatchResultStatus {
+    Applied,
+    Failed,
+    Rejected,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum AgentToolSafety {
     ReadOnly,
     RequiresApproval,
@@ -395,11 +462,39 @@ pub struct AgentToolResult {
 #[serde(rename_all = "camelCase")]
 pub struct AgentDiffProposal {
     pub id: String,
+    pub operation: AgentPatchOperation,
     pub file_path: String,
     pub patch: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_revision: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
     pub approval_status: AgentApprovalStatus,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentPatchResult {
+    pub status: AgentPatchResultStatus,
+    pub operation: AgentPatchOperation,
+    pub file_path: String,
+    #[serde(default)]
+    pub applied_file_paths: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git_diff: Option<AgentGitDiffSnapshot>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git_diff_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentGitDiffSnapshot {
+    pub patch: String,
+    pub truncated: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]

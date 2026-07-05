@@ -46,7 +46,7 @@ React ChatComposer
 - `workspace_map`: 梳理已选择 workspace 的文件树摘要、语言统计、关键文件和入口/测试/文档候选
 - `search_files`: 按 workspace 相对路径或文件名查找文件/目录
 - `search_code`: 在 UTF-8 文本文件中搜索内容
-- `read_file`: 读取 workspace 内的 UTF-8 文本文件片段
+- `read_file`: 读取 workspace 内的 UTF-8 文本文件片段，并返回可用于安全编辑的内容 revision
 - `read_pdf`: 提取 workspace 内 `.pdf` 文本
 - `read_word`: 提取 workspace 内 `.docx` / `.doc` 文本
 - `read_presentation`: 提取 workspace 内 `.pptx` / `.ppt` 文本
@@ -54,8 +54,7 @@ React ChatComposer
 - `web_search`: 使用 Tavily 搜索公开网页
 - `web_fetch`: 使用 Tavily Extract 抽取公开 HTTP(S) URL 的可读内容
 - `git_diff`: 读取当前 workspace 的 Git diff
-- `generate_patch`: 为文本/代码/配置类文件生成待审批 unified diff
-- `apply_patch`: 请求用户审批后应用文本/代码/配置类 unified diff；agent runtime 不会自动写文件
+- `apply_patch`: 以单个待审批 tool call 创建、编辑或删除文本/代码/配置文件；模型提交完整内容或结构化编辑，Rust 生成 unified diff，并在批准、应用失败或拒绝后返回同一 callId 的 tool result
 - `run_command`: 请求用户审批后运行 workspace 内命令；agent runtime 不会自动执行
 
 文件类工具都限制在用户已选择的 workspace 内，默认跳过 `.git`、`node_modules`、
@@ -65,12 +64,15 @@ React ChatComposer
 `web_search` / `web_fetch` 是外部联网工具，只在 SQLite 配置里的搜索模式不是 `disabled` 且存在 Tavily API Key 时注册。
 `web_fetch` 只接受公开 `http://` / `https://` URL，会拒绝 localhost、本地/私有/链路本地 IP、云元数据地址和带用户名密码的 URL。
 
-它暂时不直接执行写文件、应用 patch、任意命令或 Git 修改操作。`generate_patch` / `apply_patch` / `run_command`
+它暂时不直接执行写文件、应用 patch、任意命令或 Git 修改操作。`apply_patch` / `run_command`
 已作为审批型工具注册：模型可以提出 diff 或命令请求，runtime 会返回 `waiting_for_approval`
 和对应的 `AgentProposedAction`，用户拒绝时可通过 `AgentApprovalDecision.message`
 把拒绝理由或改法要求回灌给 agent。真实 patch 应用和命令执行仍应由 Tauri/Rust 层在用户批准后完成。
-`generate_patch` / `apply_patch` 当前只接受 unified diff，并限制在文本、代码、配置、Markdown、JSON/YAML/TOML/XML/SVG、
-CSV/TSV、IPYNB 等可 diff 文件；PDF 和 Office 文件需要后续专用编辑工具。
+`apply_patch` 要求显式声明 `operation=create|update|delete`。create 直接提交完整 `content`；update 可以提交完整
+`content`，也可以按顺序提交 `replace`、`insert_before`、`insert_after`、`append`、`prepend` 结构化编辑；delete 只需目标路径。
+Rust 会校验唯一锚点、内容 revision 和文件大小，再生成 unified diff 供用户审批。旧 `patch` 参数仅作为高级兼容输入保留，
+并会自动补齐末尾换行。支持文本、代码、配置、Markdown、JSON/YAML/TOML/XML/SVG、CSV/TSV、IPYNB 等可 diff 文件；
+PDF 和 Office 文件需要专用编辑工具。
 
 ## Native tool calling
 
@@ -80,9 +82,9 @@ CSV/TSV、IPYNB 等可 diff 文件；PDF 和 Office 文件需要后续专用编�
 - Anthropic-compatible：`tools: [{ name, description, input_schema }]`
 
 模型返回的 OpenAI `tool_calls[]` 或 Anthropic `tool_use` block 会被统一解析成内部 `LlmToolCall`，
-再映射到协议层 `AgentToolCall` 事件。只读工具执行结果会按 provider 要求作为 OpenAI `role=tool`
-消息或 Anthropic `tool_result` block 回灌给模型。审批型工具仍然只生成 `AgentProposedAction`，
-不会在 agent runtime 内自动执行。
+再映射到协议层 `AgentToolCall` 事件。工具执行结果会按 provider 要求作为 OpenAI `role=tool`
+消息或 Anthropic `tool_result` block 回灌给模型。审批型工具先生成 `AgentProposedAction`；host 批准、拒绝或执行失败后，
+通过 `AgentToolContinuation` 恢复同一个原生 tool call 生命周期，不把结果伪装成普通 user 消息。
 
 runtime 仍保留旧的文本 JSON tool_call 解析作为兼容兜底，但系统提示已经要求模型使用原生
 tool/function calling。

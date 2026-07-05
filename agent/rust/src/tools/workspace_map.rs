@@ -1,7 +1,4 @@
-use super::{
-    clean_relative_path, relative_display, walk_workspace_with_cancellation, AgentTool,
-    ToolExecutionContext,
-};
+use super::{relative_display, walk_workspace_with_cancellation, AgentTool, ToolExecutionContext};
 use crate::cancellation::AgentCancellationToken;
 use crate::protocol::{AgentError, AgentResult, AgentToolDefinition, AgentToolSafety};
 use serde::Deserialize;
@@ -71,24 +68,30 @@ impl AgentTool for WorkspaceMapTool {
         let include_files = args.include_files.unwrap_or(true);
 
         let workspace_root = context.workspace_root()?;
-        let focus_root = resolve_focus_root(&workspace_root, args.focus_path.as_deref())?;
+        let focus_root = resolve_focus_root(context, &workspace_root, args.focus_path.as_deref())?;
         let cancellation_token = context.cancellation_token();
-        let focus_path = relative_display(&workspace_root, &focus_root);
+        let focus_path =
+            context.display_path(args.focus_path.as_deref().unwrap_or("."), &focus_root)?;
         let focus_path = if focus_path.is_empty() {
             ".".to_string()
         } else {
             focus_path
         };
+        let display_root = if focus_root.starts_with(&workspace_root) {
+            workspace_root.as_path()
+        } else {
+            focus_root.as_path()
+        };
 
         let walk = walk_workspace_with_cancellation(&focus_root, &cancellation_token)?;
         let summary = build_summary(
-            &workspace_root,
+            display_root,
             &focus_root,
             &walk.entries,
             &cancellation_token,
         )?;
         let tree = build_tree(
-            &workspace_root,
+            display_root,
             &focus_root,
             &walk.entries,
             max_depth,
@@ -152,21 +155,16 @@ struct FileCandidate {
     reason: Option<&'static str>,
 }
 
-fn resolve_focus_root(workspace_root: &Path, focus_path: Option<&str>) -> AgentResult<PathBuf> {
+fn resolve_focus_root(
+    context: &ToolExecutionContext,
+    workspace_root: &Path,
+    focus_path: Option<&str>,
+) -> AgentResult<PathBuf> {
     let Some(focus_path) = focus_path.map(str::trim).filter(|path| !path.is_empty()) else {
         return Ok(workspace_root.to_path_buf());
     };
 
-    let relative = clean_relative_path(focus_path)?;
-    let focus_root = workspace_root
-        .join(relative)
-        .canonicalize()
-        .map_err(|error| AgentError::new(format!("workspace_map.focusPath 不可访问：{error}")))?;
-    if !focus_root.starts_with(workspace_root) {
-        return Err(AgentError::new(
-            "workspace_map.focusPath 必须位于已选择的 workspace 内。",
-        ));
-    }
+    let focus_root = context.resolve_existing_path(focus_path)?;
     if !focus_root.is_dir() {
         return Err(AgentError::new(
             "workspace_map.focusPath 必须是 workspace 内的目录。",
@@ -724,6 +722,7 @@ mod tests {
                     root_path: Some(self.root.to_string_lossy().to_string()),
                 }),
                 attachment_library: None,
+                permissions: Default::default(),
             }))
         }
     }

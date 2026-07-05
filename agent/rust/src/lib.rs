@@ -2,6 +2,7 @@ mod cancellation;
 mod llm;
 mod prompts;
 pub mod protocol;
+mod revision;
 mod runtime;
 mod tools;
 mod usage;
@@ -10,16 +11,19 @@ pub use cancellation::AgentCancellationToken;
 pub use protocol::{
     AgentApiStyle, AgentApprovalDecision, AgentApprovalDecisionStatus, AgentApprovalStatus,
     AgentAttachmentLibraryContext, AgentAttachmentReference, AgentChatInput, AgentChatMessage,
-    AgentChatOutput, AgentCommandOutputStream, AgentCommandRequest, AgentCommandRiskLevel,
-    AgentDiffProposal, AgentError, AgentEvent, AgentInputAttachment, AgentInputAttachmentEncoding,
-    AgentInputAttachmentKind, AgentPromptDetailLevel, AgentPromptPreferences, AgentPromptTone,
-    AgentPromptWorkMode, AgentProposedAction, AgentResult, AgentRunContext, AgentRunMode,
+    AgentChatOutput, AgentCommandOutputStream, AgentCommandPermission, AgentCommandRequest,
+    AgentCommandRiskLevel, AgentDiffProposal, AgentError, AgentEvent, AgentGitDiffSnapshot,
+    AgentInputAttachment, AgentInputAttachmentEncoding, AgentInputAttachmentKind,
+    AgentPatchOperation, AgentPatchResult, AgentPatchResultStatus, AgentPermissions,
+    AgentPromptDetailLevel, AgentPromptPreferences, AgentPromptTone, AgentPromptWorkMode,
+    AgentProposedAction, AgentReadPermission, AgentResult, AgentRunContext, AgentRunMode,
     AgentRunStatus, AgentSearchConfig, AgentSearchMode, AgentStateSnapshot, AgentToolCall,
-    AgentToolDefinition, AgentToolResult, AgentToolSafety, AgentUsage, AgentUsageClearInput,
-    AgentUsageClearOutput, AgentUsageModelSummary, AgentUsageSummaryInput, AgentUsageSummaryOutput,
-    AgentUsageSummaryRange, AgentWorkspaceContext,
+    AgentToolContinuation, AgentToolDefinition, AgentToolResult, AgentToolSafety, AgentUsage,
+    AgentUsageClearInput, AgentUsageClearOutput, AgentUsageModelSummary, AgentUsageSummaryInput,
+    AgentUsageSummaryOutput, AgentUsageSummaryRange, AgentWorkspaceContext, AgentWritePermission,
 };
+pub use revision::content_revision;
 pub use runtime::{
     next_run_id, send_chat, send_chat_with_events, send_chat_with_events_and_cancellation,
-    AgentEventEmitter, AgentRuntime,
+    send_chat_with_host_executor, AgentEventEmitter, AgentHostActionExecutor, AgentRuntime,
 };
