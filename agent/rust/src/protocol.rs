@@ -139,12 +139,22 @@ pub enum AgentCommandPermission {
     AutoApprove,
 }
 
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentPatchPermission {
+    #[default]
+    RequireApproval,
+    AutoApprove,
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentPermissions {
     pub read: AgentReadPermission,
     pub write: AgentWritePermission,
     pub command: AgentCommandPermission,
+    #[serde(default)]
+    pub patch: AgentPatchPermission,
 }
 
 impl Default for AgentPermissions {
@@ -153,6 +163,7 @@ impl Default for AgentPermissions {
             read: AgentReadPermission::WorkspaceOnly,
             write: AgentWritePermission::Denied,
             command: AgentCommandPermission::RequireApproval,
+            patch: AgentPatchPermission::RequireApproval,
         }
     }
 }

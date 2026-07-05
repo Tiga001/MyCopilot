@@ -1,3 +1,4 @@
+use crate::fs::{canonical_workspace_root, clean_relative_path};
 use crate::storage::models::{
     AgentPromptPreferencesRecord, AppDataSnapshot, AttachmentRecord, ChatConversationMetaRecord,
     ChatConversationRecord, ChatMessageAttachmentRecord, ChatMessageRecord, ChatMessageStateRecord,
@@ -218,6 +219,119 @@ pub fn show_project_in_folder(
             .arg(&path)
             .spawn()
             .map_err(|error| format!("无法在文件管理器中显示项目：{error}"))?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub fn reveal_project_file(
+    state: State<'_, StorageState>,
+    project_id: Option<String>,
+    file_path: String,
+) -> Result<(), String> {
+    let workspace_root = if let Some(project_id) = project_id {
+        let connection = state.connection()?;
+        let project = project_repository::get_project(&connection, &project_id)
+            .map_err(storage_error)?
+            .ok_or_else(|| "项目不存在。".to_string())?;
+        let project_path = project
+            .path
+            .ok_or_else(|| "该项目没有本地路径。".to_string())?;
+        Some(canonical_workspace_root(Path::new(&project_path))?)
+    } else {
+        None
+    };
+    let (target, select_target) =
+        resolve_project_reveal_target(workspace_root.as_deref(), &file_path)?;
+
+    reveal_in_file_manager(&target, select_target)
+}
+
+fn resolve_project_reveal_target(
+    workspace_root: Option<&Path>,
+    file_path: &str,
+) -> Result<(PathBuf, bool), String> {
+    let file_path = file_path.trim();
+    if file_path.is_empty() {
+        return Err("文件路径不能为空。".to_string());
+    }
+
+    let is_absolute = Path::new(file_path).is_absolute();
+    let raw_target = if is_absolute {
+        PathBuf::from(file_path)
+    } else {
+        workspace_root
+            .ok_or_else(|| "相对文件路径需要绑定项目 workspace。".to_string())?
+            .join(clean_relative_path(file_path)?)
+    };
+
+    if raw_target.exists() {
+        let target = raw_target
+            .canonicalize()
+            .map_err(|error| format!("文件路径不可访问：{error}"))?;
+        if !is_absolute && !target.starts_with(workspace_root.expect("relative path has workspace"))
+        {
+            return Err("不允许显示 workspace 外的文件。".to_string());
+        }
+        let select_target = target.is_file();
+        return Ok((target, select_target));
+    }
+
+    let parent = raw_target
+        .parent()
+        .ok_or_else(|| "无法确定文件所在目录。".to_string())?
+        .canonicalize()
+        .map_err(|error| format!("文件所在目录不可访问：{error}"))?;
+    if !is_absolute && !parent.starts_with(workspace_root.expect("relative path has workspace")) {
+        return Err("不允许显示 workspace 外的目录。".to_string());
+    }
+
+    Ok((parent, false))
+}
+
+fn reveal_in_file_manager(target: &Path, select_target: bool) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let mut command = Command::new("open");
+        if select_target {
+            command.arg("-R");
+        }
+        command
+            .arg(target)
+            .spawn()
+            .map_err(|error| format!("无法在 Finder 中显示文件：{error}"))?;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let mut command = Command::new("explorer");
+        if select_target {
+            command.arg("/select,");
+        }
+        command
+            .arg(target)
+            .spawn()
+            .map_err(|error| format!("无法在文件管理器中显示文件：{error}"))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let directory = if select_target {
+            target.parent().unwrap_or(target)
+        } else {
+            target
+        };
+        Command::new("xdg-open")
+            .arg(directory)
+            .spawn()
+            .map_err(|error| format!("无法在文件管理器中显示文件：{error}"))?;
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        let _ = (target, select_target);
+        return Err("当前平台暂不支持在文件管理器中显示文件。".to_string());
     }
 
     Ok(())
@@ -787,6 +901,62 @@ mod tests {
             storage_rel_path: storage_rel_path.to_string(),
             created_at: 1,
         }
+    }
+
+    #[test]
+    fn resolve_project_reveal_target_selects_existing_workspace_file() {
+        let root = test_attachment_root("reveal-existing");
+        let file = root.join("src/main.rs");
+        fs::create_dir_all(file.parent().expect("file parent should exist")).unwrap();
+        fs::write(&file, "fn main() {}\n").unwrap();
+        let canonical_root = root.canonicalize().unwrap();
+
+        let (target, select_target) =
+            resolve_project_reveal_target(Some(&canonical_root), "src/main.rs").unwrap();
+
+        assert_eq!(target, file.canonicalize().unwrap());
+        assert!(select_target);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn resolve_project_reveal_target_opens_parent_for_missing_file() {
+        let root = test_attachment_root("reveal-missing");
+        let directory = root.join("src");
+        fs::create_dir_all(&directory).unwrap();
+        let canonical_root = root.canonicalize().unwrap();
+
+        let (target, select_target) =
+            resolve_project_reveal_target(Some(&canonical_root), "src/deleted.rs").unwrap();
+
+        assert_eq!(target, directory.canonicalize().unwrap());
+        assert!(!select_target);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn resolve_project_reveal_target_rejects_relative_workspace_escape() {
+        let root = test_attachment_root("reveal-relative-escape");
+        let canonical_root = root.canonicalize().unwrap();
+
+        let result = resolve_project_reveal_target(Some(&canonical_root), "../outside.txt");
+
+        assert!(result.is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn resolve_project_reveal_target_allows_explicit_absolute_path_outside_workspace() {
+        let outside = test_attachment_root("reveal-absolute-outside");
+        let file = outside.join("outside.txt");
+        fs::write(&file, "outside\n").unwrap();
+
+        let (target, select_target) =
+            resolve_project_reveal_target(None, file.to_string_lossy().as_ref()).unwrap();
+
+        assert_eq!(target, file.canonicalize().unwrap());
+        assert!(select_target);
+        let _ = fs::remove_dir_all(outside);
     }
 
     #[test]

@@ -17,6 +17,7 @@ interface AgentToolActivityProps {
   webActivity?: ChatWebSearchActivity;
   call: AgentToolCall;
   diff?: AgentDiffProposal;
+  projectId?: string | null;
   result?: AgentToolResult;
 }
 
@@ -26,6 +27,7 @@ export function AgentToolActivity({
   webActivity,
   call,
   diff,
+  projectId,
   result,
 }: AgentToolActivityProps) {
   if (call.tool === "attachments_list" || call.tool === "attachments_list_project") {
@@ -62,6 +64,7 @@ export function AgentToolActivity({
         cancelled={cancelled && !result}
         call={call}
         diff={diff}
+        projectId={projectId}
         result={result}
       />
     );

@@ -1,7 +1,8 @@
 use crate::storage::models::UiPreferencesRecord;
 use crate::storage::now_ms;
 use my_copilot_agent::{
-    AgentCommandPermission, AgentPermissions, AgentReadPermission, AgentWritePermission,
+    AgentCommandPermission, AgentPatchPermission, AgentPermissions, AgentReadPermission,
+    AgentWritePermission,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::HashSet;
@@ -30,6 +31,7 @@ pub fn load_ui_preferences(connection: &Connection) -> rusqlite::Result<UiPrefer
                 custom_read_permission,
                 custom_write_permission,
                 custom_command_permission,
+                custom_patch_permission,
                 updated_at
             FROM ui_preferences
             WHERE id = 'default'
@@ -53,8 +55,9 @@ pub fn load_ui_preferences(connection: &Connection) -> rusqlite::Result<UiPrefer
                         read: parse_read_permission(row.get::<_, String>(10)?.as_str()),
                         write: parse_write_permission(row.get::<_, String>(11)?.as_str()),
                         command: parse_command_permission(row.get::<_, String>(12)?.as_str()),
+                        patch: parse_patch_permission(row.get::<_, String>(13)?.as_str()),
                     },
-                    updated_at: row.get(13)?,
+                    updated_at: row.get(14)?,
                 })
             },
         )
@@ -91,9 +94,10 @@ pub fn save_ui_preferences(
             custom_read_permission,
             custom_write_permission,
             custom_command_permission,
+            custom_patch_permission,
             updated_at
         )
-        VALUES ('default', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+        VALUES ('default', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
         ON CONFLICT(id) DO UPDATE SET
             sidebar_conversation_sort = excluded.sidebar_conversation_sort,
             sidebar_project_sort = excluded.sidebar_project_sort,
@@ -108,6 +112,7 @@ pub fn save_ui_preferences(
             custom_read_permission = excluded.custom_read_permission,
             custom_write_permission = excluded.custom_write_permission,
             custom_command_permission = excluded.custom_command_permission,
+            custom_patch_permission = excluded.custom_patch_permission,
             updated_at = excluded.updated_at
         ",
         params![
@@ -136,6 +141,7 @@ pub fn save_ui_preferences(
             read_permission_value(preferences.custom_permissions.read),
             write_permission_value(preferences.custom_permissions.write),
             command_permission_value(preferences.custom_permissions.command),
+            patch_permission_value(preferences.custom_permissions.patch),
             timestamp,
         ],
     )?;
@@ -162,6 +168,7 @@ fn default_ui_preferences() -> UiPreferencesRecord {
             read: AgentReadPermission::WorkspaceOnly,
             write: AgentWritePermission::WorkspaceOnly,
             command: AgentCommandPermission::RequireApproval,
+            patch: AgentPatchPermission::RequireApproval,
         },
         updated_at: 0,
     }
@@ -221,6 +228,13 @@ fn parse_command_permission(value: &str) -> AgentCommandPermission {
     }
 }
 
+fn parse_patch_permission(value: &str) -> AgentPatchPermission {
+    match value {
+        "auto_approve" => AgentPatchPermission::AutoApprove,
+        _ => AgentPatchPermission::RequireApproval,
+    }
+}
+
 fn read_permission_value(value: AgentReadPermission) -> &'static str {
     match value {
         AgentReadPermission::WorkspaceOnly => "workspace_only",
@@ -240,6 +254,13 @@ fn command_permission_value(value: AgentCommandPermission) -> &'static str {
     match value {
         AgentCommandPermission::RequireApproval => "require_approval",
         AgentCommandPermission::AutoApprove => "auto_approve",
+    }
+}
+
+fn patch_permission_value(value: AgentPatchPermission) -> &'static str {
+    match value {
+        AgentPatchPermission::RequireApproval => "require_approval",
+        AgentPatchPermission::AutoApprove => "auto_approve",
     }
 }
 
@@ -317,6 +338,7 @@ mod tests {
                 read: AgentReadPermission::WorkspaceOnly,
                 write: AgentWritePermission::WorkspaceOnly,
                 command: AgentCommandPermission::RequireApproval,
+                patch: AgentPatchPermission::RequireApproval,
             }
         );
 
@@ -324,6 +346,7 @@ mod tests {
             read: AgentReadPermission::All,
             write: AgentWritePermission::Denied,
             command: AgentCommandPermission::AutoApprove,
+            patch: AgentPatchPermission::AutoApprove,
         };
         save_ui_preferences(&connection, preferences).expect("preferences should save");
 
@@ -334,6 +357,7 @@ mod tests {
                 read: AgentReadPermission::All,
                 write: AgentWritePermission::Denied,
                 command: AgentCommandPermission::AutoApprove,
+                patch: AgentPatchPermission::AutoApprove,
             }
         );
     }

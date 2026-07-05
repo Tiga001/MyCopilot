@@ -45,6 +45,10 @@ function getRememberCommandPrefix(action: AgentProposedAction) {
   return action.command.command.trim();
 }
 
+function canRememberForRun(action: AgentProposedAction) {
+  return action.type === "command" || action.type === "diff";
+}
+
 export function AgentApprovalDialog({
   target,
   onApprove,
@@ -58,6 +62,7 @@ export function AgentApprovalDialog({
   const request = getApprovalRequest(action, t);
   const code = getApprovalCode(action);
   const rememberPrefix = getRememberCommandPrefix(action);
+  const showRememberChoice = canRememberForRun(action);
 
   useEffect(() => {
     setRejectMessage("");
@@ -99,7 +104,7 @@ export function AgentApprovalDialog({
         <span>{t("agent.approval.dialog.approve")}</span>
       </button>
 
-      {rememberPrefix ? (
+      {showRememberChoice ? (
         <button
           className="agent-approval-dialog__choice"
           data-choice="remember"
@@ -109,12 +114,16 @@ export function AgentApprovalDialog({
         >
           <span className="agent-approval-dialog__index">2</span>
           <span className="agent-approval-dialog__choice-text">
-            {t("agent.approval.dialog.approveRemember")}
-            <small>
-              {formatTranslation(t, "agent.approval.dialog.rememberPrefix", {
-                prefix: rememberPrefix,
-              })}
-            </small>
+            {action.type === "diff"
+              ? t("agent.approval.dialog.approvePatchRemember")
+              : t("agent.approval.dialog.approveRemember")}
+            {rememberPrefix ? (
+              <small>
+                {formatTranslation(t, "agent.approval.dialog.rememberPrefix", {
+                  prefix: rememberPrefix,
+                })}
+              </small>
+            ) : null}
           </span>
         </button>
       ) : null}

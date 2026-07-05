@@ -12,19 +12,19 @@ impl AgentTool for SearchFilesTool {
     fn definition(&self) -> AgentToolDefinition {
         AgentToolDefinition {
             name: "search_files".to_string(),
-            description: "Find files or directories by workspace-relative path or file name."
+            description: "Find files or directories by path or file name. With no workspace, provide an absolute path or a system alias such as @desktop."
                 .to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "query": { "type": "string", "description": "Case-insensitive path or file-name substring." },
-                    "path": { "type": "string", "description": "Optional workspace-relative directory to search. Defaults to workspace root." },
+                    "path": { "type": "string", "description": "Optional workspace-relative or absolute directory, or @home/@desktop/@documents/@downloads. Defaults to workspace root when one exists." },
                     "limit": { "type": "integer", "minimum": 1, "maximum": MAX_SEARCH_LIMIT }
                 },
                 "required": ["query"]
             }),
             safety: AgentToolSafety::ReadOnly,
-            requires_workspace: true,
+            requires_workspace: false,
             requires_approval: false,
         }
     }
@@ -40,7 +40,11 @@ impl AgentTool for SearchFilesTool {
         let limit = sanitize_limit(args.limit);
         let root = match args.path.as_deref().filter(|path| !path.trim().is_empty()) {
             Some(path) => context.resolve_existing_path(path)?,
-            None => context.workspace_root()?,
+            None => context.workspace_root_optional()?.ok_or_else(|| {
+                AgentError::new(
+                    "当前没有 workspace；search_files.path 必须指定绝对目录或系统路径别名。",
+                )
+            })?,
         };
         if !root.is_dir() {
             return Err(AgentError::new("search_files.path 必须是目录。"));

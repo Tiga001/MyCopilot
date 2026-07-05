@@ -206,6 +206,10 @@ export async function showStoredProjectInFolder(projectId: string): Promise<void
   await invoke("show_project_in_folder", { projectId });
 }
 
+export async function revealStoredProjectFile(projectId: string | null | undefined, filePath: string): Promise<void> {
+  await invoke("reveal_project_file", { projectId, filePath });
+}
+
 export async function loadConversations(): Promise<ChatConversation[]> {
   const conversations = await invoke<PersistedChatConversation[]>("load_conversations");
   return conversations.map(mapConversationFromPersistence);
@@ -533,6 +537,7 @@ export function defaultUiPreferences(): UiPreferencesSnapshot {
       read: "workspace_only",
       write: "workspace_only",
       command: "require_approval",
+      patch: "require_approval",
     },
     updatedAt: 0,
   };
@@ -579,6 +584,7 @@ function normalizeAgentPermissions(permissions: AgentPermissions | null | undefi
         ? permissions.write
         : defaults.write,
     command: permissions.command === "auto_approve" ? "auto_approve" : defaults.command,
+    patch: permissions.patch === "auto_approve" ? "auto_approve" : defaults.patch,
   };
 }
 

@@ -1027,14 +1027,72 @@
   color: var(--mc-color-text-danger);
 }
 
-.apply-patch-activity__path {
-  overflow-wrap: anywhere;
-  color: var(--mc-color-text-secondary) !important;
-  font-family: var(--mc-font-family-mono);
+.apply-patch-activity__details {
+  gap: 6px;
 }
 
-.apply-patch-activity__error {
+.apply-patch-activity__item {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.apply-patch-activity__item-line {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+  max-width: 100%;
+  gap: 6px;
+  color: var(--mc-color-text-muted);
+  line-height: var(--mc-line-height-relaxed);
+}
+
+.apply-patch-activity__item-line > span {
+  font-size: inherit;
+  font-weight: inherit;
+}
+
+.apply-patch-activity__path {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--mc-color-text-accent) !important;
+}
+
+button.apply-patch-activity__path {
+  padding: 0;
+  border: 0;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  line-height: inherit;
+  text-align: left;
+}
+
+button.apply-patch-activity__path:hover,
+button.apply-patch-activity__path:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.apply-patch-activity__additions,
+.apply-patch-activity__deletions {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.apply-patch-activity__additions {
+  color: #16a34a !important;
+}
+
+.apply-patch-activity__deletions {
   color: var(--mc-color-text-danger) !important;
+}
+
+.apply-patch-activity__note {
+  padding-left: 0;
+  color: var(--mc-color-text-danger) !important;
+  font-size: var(--mc-font-size-chat-metadata);
 }
 
 .agent-activity--error {

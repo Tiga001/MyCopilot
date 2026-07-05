@@ -53,6 +53,7 @@ mod tests {
             read: AgentReadPermission::WorkspaceOnly,
             write,
             command: AgentCommandPermission::RequireApproval,
+            patch: Default::default(),
         }
     }
 

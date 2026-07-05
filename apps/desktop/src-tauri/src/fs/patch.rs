@@ -16,8 +16,8 @@ pub struct PatchApplyResult {
     pub file_paths: Vec<String>,
 }
 
-pub fn apply_unified_diff(
-    workspace_root: &Path,
+pub fn apply_unified_diff_in_context(
+    workspace_root: Option<&Path>,
     operation: AgentPatchOperation,
     expected_file_path: &str,
     patch: &str,
@@ -35,13 +35,13 @@ pub fn apply_unified_diff(
         return Err("patch 不能包含空字符。".to_string());
     }
 
-    let root = canonical_workspace_root(workspace_root)?;
-    let target = resolve_patch_target(&root, expected_file_path)?;
+    let root = workspace_root.map(canonical_workspace_root).transpose()?;
+    let target = resolve_patch_target(root.as_deref(), expected_file_path)?;
     require_patch_write(permissions, target.outside_workspace)?;
     reject_unsupported_extension(&target.display_path)?;
     validate_patch_operation(&target, operation, patch)?;
     validate_base_revision(&target, operation, expected_base_revision)?;
-    let paths = validate_patch_paths(&root, &target, patch)?;
+    let paths = validate_patch_paths(root.as_deref(), &target, patch)?;
 
     let (apply_root, apply_patch) = if target.outside_workspace {
         let parent = target
@@ -52,7 +52,10 @@ pub fn apply_unified_diff(
             .map_err(|error| format!("外部 patch 目标父目录不可访问：{error}"))?;
         (parent, rewrite_patch_for_external_target(patch, &target)?)
     } else {
-        (root.clone(), patch.to_string())
+        (
+            root.ok_or_else(|| "没有 workspace 时 patch 目标必须是绝对路径。".to_string())?,
+            patch.to_string(),
+        )
     };
 
     run_git_apply(&apply_root, &apply_patch, true)?;
@@ -138,7 +141,7 @@ fn patch_header_path(patch: &str, prefix: &str) -> Result<String, String> {
 }
 
 fn validate_patch_paths(
-    root: &Path,
+    root: Option<&Path>,
     target: &ResolvedPatchTarget,
     patch: &str,
 ) -> Result<BTreeSet<String>, String> {
@@ -161,7 +164,10 @@ fn validate_patch_paths(
         if target.outside_workspace {
             validate_external_target(target)?;
         } else {
-            validate_no_symlink_parent(root, &normalized)?;
+            validate_no_symlink_parent(
+                root.ok_or_else(|| "内部 patch 缺少 workspace root。".to_string())?,
+                &normalized,
+            )?;
         }
         normalized_paths.insert(normalized);
     }
@@ -243,7 +249,7 @@ struct ResolvedPatchTarget {
     outside_workspace: bool,
 }
 
-fn resolve_patch_target(root: &Path, path: &str) -> Result<ResolvedPatchTarget, String> {
+fn resolve_patch_target(root: Option<&Path>, path: &str) -> Result<ResolvedPatchTarget, String> {
     let path = path.trim();
     if path.is_empty() {
         return Err("patch 目标路径不能为空。".to_string());
@@ -251,6 +257,9 @@ fn resolve_patch_target(root: &Path, path: &str) -> Result<ResolvedPatchTarget, 
 
     let candidate = Path::new(path);
     if !candidate.is_absolute() {
+        let root = root.ok_or_else(|| {
+            "当前没有 workspace；patch 目标必须使用绝对路径或系统路径别名。".to_string()
+        })?;
         let display_path = normalize_patch_path(path)?;
         return Ok(ResolvedPatchTarget {
             absolute_path: root.join(&display_path),
@@ -260,10 +269,13 @@ fn resolve_patch_target(root: &Path, path: &str) -> Result<ResolvedPatchTarget, 
     }
 
     let absolute_path = normalize_absolute_target(candidate)?;
-    let outside_workspace = !absolute_path.starts_with(root);
+    let outside_workspace = root
+        .map(|root| !absolute_path.starts_with(root))
+        .unwrap_or(true);
     let display_path = if outside_workspace {
         absolute_path.to_string_lossy().to_string()
     } else {
+        let root = root.ok_or_else(|| "内部 patch 缺少 workspace root。".to_string())?;
         relative_display(
             &absolute_path
                 .strip_prefix(root)
@@ -292,7 +304,7 @@ fn normalize_absolute_target(path: &Path) -> Result<PathBuf, String> {
 }
 
 fn normalize_declared_patch_path(
-    root: &Path,
+    root: Option<&Path>,
     target: &ResolvedPatchTarget,
     path: &str,
 ) -> Result<String, String> {
@@ -305,6 +317,8 @@ fn normalize_declared_patch_path(
             .to_string_lossy()
             .to_string());
     }
+
+    let root = root.ok_or_else(|| "内部 patch 缺少 workspace root。".to_string())?;
 
     let declared = Path::new(path);
     if declared.is_absolute() {
@@ -503,9 +517,9 @@ mod tests {
     #[test]
     fn rejects_path_mismatch() {
         let root = TestWorkspace::new();
-        let target = resolve_patch_target(&root.path, "src/main.rs").unwrap();
+        let target = resolve_patch_target(Some(&root.path), "src/main.rs").unwrap();
         let error = validate_patch_paths(
-            &root.path,
+            Some(&root.path),
             &target,
             "--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-old\n+new\n",
         )
@@ -539,10 +553,11 @@ mod tests {
             read: AgentReadPermission::WorkspaceOnly,
             write: AgentWritePermission::WorkspaceOnly,
             command: AgentCommandPermission::RequireApproval,
+            patch: Default::default(),
         };
 
-        let error = apply_unified_diff(
-            &workspace.path,
+        let error = apply_unified_diff_in_context(
+            Some(&workspace.path),
             AgentPatchOperation::Update,
             &target_display,
             &patch,
@@ -556,8 +571,8 @@ mod tests {
             write: AgentWritePermission::All,
             ..workspace_only
         };
-        let result = apply_unified_diff(
-            &workspace.path,
+        let result = apply_unified_diff_in_context(
+            Some(&workspace.path),
             AgentPatchOperation::Update,
             &target_display,
             &patch,
@@ -575,16 +590,58 @@ mod tests {
     }
 
     #[test]
+    fn applies_absolute_patch_without_workspace_when_write_is_all() {
+        let root = std::env::temp_dir().join(format!(
+            "my-copilot-no-workspace-patch-test-{}",
+            TEST_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let target = root.join("poem.txt");
+        let target_display = target.to_string_lossy();
+        let patch = format!(
+            "--- /dev/null\n+++ {target_display}\n@@ -0,0 +1,2 @@\n+白日依山尽\n+黄河入海流\n"
+        );
+        let permissions = AgentPermissions {
+            read: AgentReadPermission::All,
+            write: AgentWritePermission::All,
+            command: AgentCommandPermission::RequireApproval,
+            patch: Default::default(),
+        };
+
+        let result = apply_unified_diff_in_context(
+            None,
+            AgentPatchOperation::Create,
+            &target_display,
+            &patch,
+            None,
+            permissions,
+        )
+        .unwrap();
+
+        assert_eq!(
+            result.file_paths,
+            vec![target.canonicalize().unwrap().to_string_lossy().to_string()]
+        );
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "白日依山尽\n黄河入海流\n"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn applies_create_and_delete_operations() {
         let workspace = TestWorkspace::new();
         let permissions = AgentPermissions {
             read: AgentReadPermission::WorkspaceOnly,
             write: AgentWritePermission::WorkspaceOnly,
             command: AgentCommandPermission::RequireApproval,
+            patch: Default::default(),
         };
         let create = "--- /dev/null\n+++ b/src/new.txt\n@@ -0,0 +1 @@\n+created\n";
-        apply_unified_diff(
-            &workspace.path,
+        apply_unified_diff_in_context(
+            Some(&workspace.path),
             AgentPatchOperation::Create,
             "src/new.txt",
             create,
@@ -598,8 +655,8 @@ mod tests {
         );
 
         let delete = "--- a/src/new.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-created\n";
-        apply_unified_diff(
-            &workspace.path,
+        apply_unified_diff_in_context(
+            Some(&workspace.path),
             AgentPatchOperation::Delete,
             "src/new.txt",
             delete,
@@ -619,12 +676,13 @@ mod tests {
             read: AgentReadPermission::WorkspaceOnly,
             write: AgentWritePermission::WorkspaceOnly,
             command: AgentCommandPermission::RequireApproval,
+            patch: Default::default(),
         };
         let patch = "--- a/src/notes.txt\n+++ b/src/notes.txt\n@@ -1 +1 @@\n-old\n+new\n";
         let stale = content_revision(b"old\n");
 
-        let error = apply_unified_diff(
-            &workspace.path,
+        let error = apply_unified_diff_in_context(
+            Some(&workspace.path),
             AgentPatchOperation::Update,
             "src/notes.txt",
             patch,

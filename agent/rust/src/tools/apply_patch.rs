@@ -4,6 +4,7 @@ use crate::protocol::{
     AgentResult, AgentToolCall, AgentToolDefinition, AgentToolSafety, AgentWritePermission,
 };
 use crate::revision::content_revision;
+use crate::system_paths::expand_system_path;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::fs;
@@ -165,7 +166,7 @@ impl AgentTool for ApplyPatchTool {
             description: "Request one create, update, or delete operation for a text/code/config file. Prefer structured content/edits; Rust generates the unified diff. update supports replace, insert_before, insert_after, append, and prepend. The same tool call remains active through approval and host execution. This tool never writes before host approval.".to_string(),
             input_schema: patch_input_schema(),
             safety: AgentToolSafety::RequiresApproval,
-            requires_workspace: true,
+            requires_workspace: false,
             requires_approval: true,
         }
     }
@@ -196,7 +197,7 @@ fn patch_input_schema() -> Value {
                 "enum": ["create", "update", "delete"],
                 "description": "Requested operation. create uses content; update uses edits or complete content; delete only needs filePath."
             },
-            "filePath": { "type": "string", "description": "Workspace-relative file path to create, update, or delete." },
+            "filePath": { "type": "string", "description": "Workspace-relative path, absolute local path, or a system alias such as @desktop/file.txt when permissions allow it." },
             "content": { "type": "string", "description": "Complete UTF-8 file content. Required for create; optional for update when replacing the whole file." },
             "edits": {
                 "type": "array",
@@ -581,6 +582,16 @@ fn sanitize_file_path(path: &str, permission: AgentWritePermission) -> AgentResu
     if permission == AgentWritePermission::Denied {
         return Err(AgentError::new("当前写入权限为 denied，不能提出文件修改。"));
     }
+    if let Some(expanded) = expand_system_path(path).map_err(AgentError::new)? {
+        if permission != AgentWritePermission::All {
+            return Err(AgentError::new(
+                "写入系统路径别名需要将写入范围设为“所有位置”。",
+            ));
+        }
+        let expanded = expanded.to_string_lossy().to_string();
+        validate_text_patch_path(&expanded)?;
+        return Ok(expanded);
+    }
     if Path::new(path).is_absolute() {
         if permission != AgentWritePermission::All {
             return Err(AgentError::new("当前写入权限仅允许修改 workspace 内文件。"));
@@ -962,6 +973,36 @@ mod tests {
     }
 
     #[test]
+    fn structured_create_resolves_system_alias_without_workspace() {
+        let alias = format!(
+            "@home/.my-copilot-no-workspace-{}.txt",
+            TEST_COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        let context = ToolExecutionContext::from_run_context(Some(&AgentRunContext {
+            conversation_id: None,
+            project_id: None,
+            workspace: None,
+            attachment_library: None,
+            permissions: AgentPermissions {
+                read: AgentReadPermission::All,
+                write: AgentWritePermission::All,
+                command: AgentCommandPermission::RequireApproval,
+                patch: Default::default(),
+            },
+        }));
+        let call = tool_call(json!({
+            "operation": "create",
+            "filePath": alias,
+            "content": "hello\n"
+        }));
+
+        let proposal = diff_proposal_from_call(&context, &call).unwrap();
+
+        assert!(Path::new(&proposal.file_path).is_absolute());
+        assert!(proposal.patch.starts_with("--- /dev/null\n+++ /"));
+    }
+
+    #[test]
     fn structured_update_supports_append_and_insert_after() {
         let workspace = TestWorkspace::new();
         let initial = "def quick_sort(values):\n    return sorted(values)\n";
@@ -1192,6 +1233,7 @@ mod tests {
                     read: AgentReadPermission::WorkspaceOnly,
                     write: AgentWritePermission::WorkspaceOnly,
                     command: AgentCommandPermission::RequireApproval,
+                    patch: Default::default(),
                 },
             }))
         }

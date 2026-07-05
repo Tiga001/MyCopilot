@@ -101,6 +101,7 @@ export function ChatConversationPage({
             onCancel={onCancelAgentAction}
             onReject={onRejectAgentAction}
             onUiStateChange={onMessageUiStateChange}
+            projectId={conversation.projectId}
             showTokenUsageDetails={showTokenUsageDetails}
           />
         ))}

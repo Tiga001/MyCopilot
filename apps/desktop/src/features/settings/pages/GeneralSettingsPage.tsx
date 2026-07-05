@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { FocusEvent } from "react";
 import type {
   AgentCommandPermission,
+  AgentPatchPermission,
   AgentReadPermission,
   AgentWritePermission,
 } from "@agent";
@@ -23,12 +24,13 @@ interface GeneralSettingsPageProps {
 
 interface PermissionSegmentProps {
   ariaLabel: string;
+  disabled?: boolean;
   onChange: (value: string) => void;
   options: Array<{ label: string; value: string }>;
   value: string;
 }
 
-function PermissionSegment({ ariaLabel, onChange, options, value }: PermissionSegmentProps) {
+function PermissionSegment({ ariaLabel, disabled = false, onChange, options, value }: PermissionSegmentProps) {
   return (
     <span className="general-permission-segment" role="radiogroup" aria-label={ariaLabel}>
       {options.map((option) => (
@@ -37,6 +39,7 @@ function PermissionSegment({ ariaLabel, onChange, options, value }: PermissionSe
           role="radio"
           aria-checked={option.value === value}
           data-selected={option.value === value || undefined}
+          disabled={disabled}
           key={option.value}
           onClick={() => onChange(option.value)}
         >
@@ -159,6 +162,24 @@ export function GeneralSettingsPage({ onUiPreferencesChange, uiPreferences }: Ge
                   { value: "all", label: t("general.allLocations") },
                 ]}
                 onChange={(value) => updateCustomPermissions({ write: value as AgentWritePermission })}
+              />
+            </span>
+          </div>
+
+          <div className="settings-list-row">
+            <span className="settings-list-row__text">
+              <span className="settings-list-row__title">{t("general.patchApproval")}</span>
+            </span>
+            <span className="settings-list-row__control">
+              <PermissionSegment
+                ariaLabel={t("general.patchApproval")}
+                disabled={uiPreferences.customPermissions.write === "denied"}
+                value={uiPreferences.customPermissions.patch}
+                options={[
+                  { value: "require_approval", label: t("general.yes") },
+                  { value: "auto_approve", label: t("general.no") },
+                ]}
+                onChange={(value) => updateCustomPermissions({ patch: value as AgentPatchPermission })}
               />
             </span>
           </div>

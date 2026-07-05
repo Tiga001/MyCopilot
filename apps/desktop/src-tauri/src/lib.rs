@@ -65,6 +65,7 @@ pub fn run() {
             storage::commands::save_project,
             storage::commands::delete_project,
             storage::commands::show_project_in_folder,
+            storage::commands::reveal_project_file,
             storage::commands::load_conversations,
             storage::commands::save_conversation,
             storage::commands::save_conversation_meta,

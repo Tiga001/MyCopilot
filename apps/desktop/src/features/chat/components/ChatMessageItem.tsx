@@ -29,6 +29,10 @@ import {
 import { ChatMarkdown } from "./ChatMarkdown";
 import { AgentToolActivity } from "./toolActivities/AgentToolActivity";
 import {
+  ApplyPatchToolActivityGroup,
+  type ApplyPatchToolActivityGroupItem,
+} from "./toolActivities/ApplyPatchToolActivity";
+import {
   ReadToolActivityGroup,
   type ReadToolActivityGroupItem,
 } from "./toolActivities/ReadToolActivity";
@@ -51,6 +55,7 @@ const COPIED_INDICATOR_MS = 1300;
 interface ChatMessageItemProps {
   isLastAssistantMessage?: boolean;
   message: ChatMessage;
+  projectId?: string | null;
   onApprove?: (
     messageId: string,
     action: AgentProposedAction,
@@ -79,6 +84,11 @@ type RenderableTimelineItem =
   | {
       id: string;
       type: "run_command_group";
+      callIds: string[];
+    }
+  | {
+      id: string;
+      type: "apply_patch_group";
       callIds: string[];
     };
 
@@ -339,6 +349,28 @@ function groupTimelineItems(
       ];
     }
 
+    if (call.tool === "apply_patch") {
+      const previousItem = items[items.length - 1];
+      if (previousItem?.type === "apply_patch_group") {
+        return [
+          ...items.slice(0, -1),
+          {
+            ...previousItem,
+            callIds: [...previousItem.callIds, item.callId],
+          },
+        ];
+      }
+
+      return [
+        ...items,
+        {
+          id: `apply-patch-group-${item.callId}`,
+          type: "apply_patch_group",
+          callIds: [item.callId],
+        },
+      ];
+    }
+
     return [...items, item];
   }, []);
 }
@@ -396,6 +428,27 @@ function getRunCommandGroupItems(
       {
         call,
         cancelled: run.status === "cancelled" && !result,
+        result,
+      },
+    ];
+  }, []);
+}
+
+function getApplyPatchGroupItems(
+  run: ChatAgentRunView,
+  callIds: string[],
+): ApplyPatchToolActivityGroupItem[] {
+  return callIds.reduce<ApplyPatchToolActivityGroupItem[]>((items, callId) => {
+    const call = run.toolCalls.find((candidate) => candidate.id === callId);
+    if (!call) return items;
+    const result = getToolResult(run, call.id);
+
+    return [
+      ...items,
+      {
+        call,
+        cancelled: run.status === "cancelled" && !result,
+        diff: run.diffs.find((candidate) => candidate.id === call.id),
         result,
       },
     ];
@@ -568,10 +621,12 @@ function AgentThinkingActivity() {
 function AgentTimelineItemView({
   item,
   message,
+  projectId,
   run,
 }: {
   item: RenderableTimelineItem;
   message: ChatMessage;
+  projectId?: string | null;
   run: ChatAgentRunView;
 }) {
   if (item.type === "read_group") {
@@ -590,6 +645,12 @@ function AgentTimelineItemView({
     const items = getRunCommandGroupItems(run, item.callIds);
     if (items.length === 0) return null;
     return <RunCommandToolActivityGroup items={items} />;
+  }
+
+  if (item.type === "apply_patch_group") {
+    const items = getApplyPatchGroupItems(run, item.callIds);
+    if (items.length === 0) return null;
+    return <ApplyPatchToolActivityGroup items={items} projectId={projectId} />;
   }
 
   if (item.type === "message") {
@@ -611,6 +672,7 @@ function AgentTimelineItemView({
         cancelled={run.status === "cancelled" && !result}
         call={call}
         diff={diff}
+        projectId={projectId}
         readActivity={readActivity}
         result={result}
         webActivity={webActivity}
@@ -629,9 +691,11 @@ function AgentTimelineItemView({
 function AgentRunView({
   message,
   onUiStateChange,
+  projectId,
 }: {
   message: ChatMessage;
   onUiStateChange?: (messageId: string, uiState: ChatMessage["uiState"]) => void;
+  projectId?: string | null;
 }) {
   const { t } = useFrontendConfig();
   const run = message.agentRun;
@@ -730,6 +794,7 @@ function AgentRunView({
             item={item}
             key={item.id}
             message={message}
+            projectId={projectId}
             run={run}
           />
         ))}
@@ -754,12 +819,14 @@ function AgentRunView({
 function MessageContent({
   message,
   onUiStateChange,
+  projectId,
 }: ChatMessageItemProps) {
   if (message.role === "assistant") {
     return (
       <AgentRunView
         message={message}
         onUiStateChange={onUiStateChange}
+        projectId={projectId}
       />
     );
   }
@@ -835,6 +902,7 @@ export function ChatMessageItem({
   onCancel,
   onReject,
   onUiStateChange,
+  projectId,
   showTokenUsageDetails,
 }: ChatMessageItemProps) {
   const isAssistantActionsVisible = shouldShowAssistantActions(message);
@@ -864,6 +932,7 @@ export function ChatMessageItem({
             onCancel={onCancel}
             onReject={onReject}
             onUiStateChange={onUiStateChange}
+            projectId={projectId}
             showTokenUsageDetails={showTokenUsageDetails}
           />
         </div>

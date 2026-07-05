@@ -1,8 +1,8 @@
 use crate::fs::{canonical_workspace_root, clean_relative_path, relative_display};
 use crate::permissions::require_command_execution;
 use my_copilot_agent::{
-    AgentCancellationToken, AgentCommandRequest, AgentCommandRiskLevel, AgentPermissions,
-    AgentWritePermission,
+    expand_system_path, AgentCancellationToken, AgentCommandRequest, AgentCommandRiskLevel,
+    AgentPermissions, AgentWritePermission,
 };
 use serde::Serialize;
 use std::collections::HashMap;
@@ -95,48 +95,63 @@ impl Drop for CommandRunGuard<'_> {
 }
 
 pub fn run_approved_command(
-    workspace_root: &Path,
+    workspace_root: Option<&Path>,
     request: &AgentCommandRequest,
     permissions: AgentPermissions,
     cancellation_token: AgentCancellationToken,
     action_cancel_flag: Option<Arc<AtomicBool>>,
     automatic: bool,
 ) -> Result<CommandExecutionResult, String> {
-    let root = canonical_workspace_root(workspace_root)?;
+    let root = workspace_root.map(canonical_workspace_root).transpose()?;
     let risk_level = request.risk_level.unwrap_or(AgentCommandRiskLevel::Unknown);
     require_command_execution(permissions, risk_level, automatic)?;
-    let cwd = resolve_command_cwd(&root, request.cwd.as_deref(), permissions.write)?;
+    let cwd = resolve_command_cwd(root.as_deref(), request.cwd.as_deref(), permissions.write)?;
     validate_command_request(request)?;
-    run_shell_command(&cwd, &root, request, cancellation_token, action_cancel_flag)
+    run_shell_command(
+        &cwd,
+        root.as_deref(),
+        request,
+        cancellation_token,
+        action_cancel_flag,
+    )
 }
 
 fn resolve_command_cwd(
-    root: &Path,
+    root: Option<&Path>,
     cwd: Option<&str>,
     write_permission: AgentWritePermission,
 ) -> Result<PathBuf, String> {
-    let root = canonical_workspace_root(root)?;
+    let root = root.map(canonical_workspace_root).transpose()?;
     let Some(cwd) = cwd
         .map(str::trim)
         .filter(|cwd| !cwd.is_empty() && *cwd != ".")
     else {
-        return Ok(root);
+        return root.ok_or_else(|| {
+            "当前没有 workspace；命令必须提供绝对 cwd 或系统路径别名。".to_string()
+        });
     };
-    let cwd_path = Path::new(cwd);
+    let expanded = expand_system_path(cwd)?;
+    let cwd_path = expanded.as_deref().unwrap_or_else(|| Path::new(cwd));
     let resolved = if cwd_path.is_absolute() {
         if write_permission != AgentWritePermission::All {
             return Err("命令在 workspace 外运行需要 write=all 权限。".to_string());
         }
         cwd_path.to_path_buf()
     } else {
-        root.join(clean_relative_path(cwd)?)
+        root.as_ref()
+            .ok_or_else(|| {
+                "没有 workspace 时，命令 cwd 必须是绝对路径或系统路径别名。".to_string()
+            })?
+            .join(clean_relative_path(cwd)?)
     };
     let canonical = resolved
         .canonicalize()
         .map_err(|error| format!("命令工作目录不可访问：{error}"))?;
 
-    if !canonical.starts_with(&root) && write_permission != AgentWritePermission::All {
-        return Err("命令工作目录必须位于已选择的 workspace 内。".to_string());
+    if let Some(root) = root.as_ref() {
+        if !canonical.starts_with(root) && write_permission != AgentWritePermission::All {
+            return Err("命令工作目录必须位于已选择的 workspace 内。".to_string());
+        }
     }
     if !canonical.is_dir() {
         return Err("命令工作目录不是目录。".to_string());
@@ -207,7 +222,7 @@ fn has_blocked_command_pattern(command: &str) -> bool {
 
 fn run_shell_command(
     cwd: &Path,
-    root: &Path,
+    root: Option<&Path>,
     request: &AgentCommandRequest,
     cancellation_token: AgentCancellationToken,
     action_cancel_flag: Option<Arc<AtomicBool>>,
@@ -276,7 +291,10 @@ fn run_shell_command(
     })
 }
 
-fn relative_cwd(root: &Path, cwd: &Path) -> String {
+fn relative_cwd(root: Option<&Path>, cwd: &Path) -> String {
+    let Some(root) = root else {
+        return cwd.to_string_lossy().to_string();
+    };
     match cwd.strip_prefix(root) {
         Ok(relative) => {
             let display = relative_display(relative);
@@ -317,7 +335,7 @@ mod tests {
         let workspace = TestWorkspace::new();
         std::fs::create_dir_all(workspace.path.join("agent/rust")).unwrap();
         let cwd = resolve_command_cwd(
-            &workspace.path,
+            Some(&workspace.path),
             Some("agent/rust"),
             AgentWritePermission::WorkspaceOnly,
         )
@@ -330,7 +348,7 @@ mod tests {
     fn rejects_cwd_outside_workspace() {
         let workspace = TestWorkspace::new();
         let error = resolve_command_cwd(
-            &workspace.path,
+            Some(&workspace.path),
             Some("../outside"),
             AgentWritePermission::WorkspaceOnly,
         )
@@ -364,7 +382,7 @@ mod tests {
     fn runs_simple_command_in_workspace() {
         let workspace = TestWorkspace::new();
         let result = run_approved_command(
-            &workspace.path,
+            Some(&workspace.path),
             &AgentCommandRequest {
                 id: "tool-1".to_string(),
                 command: "printf hello".to_string(),
@@ -388,6 +406,34 @@ mod tests {
         assert_eq!(result.stdout, "hello");
         assert_eq!(result.cwd, ".");
         assert!(!result.cancelled);
+    }
+
+    #[test]
+    fn runs_command_without_workspace_when_absolute_cwd_is_allowed() {
+        let cwd = std::env::temp_dir().canonicalize().unwrap();
+        let result = run_approved_command(
+            None,
+            &AgentCommandRequest {
+                id: "tool-no-workspace".to_string(),
+                command: "pwd".to_string(),
+                cwd: Some(cwd.to_string_lossy().to_string()),
+                timeout_ms: Some(5_000),
+                approval_status: AgentApprovalStatus::Required,
+                risk_level: Some(AgentCommandRiskLevel::ReadOnly),
+                reason: None,
+            },
+            AgentPermissions {
+                write: AgentWritePermission::All,
+                ..Default::default()
+            },
+            AgentCancellationToken::new(),
+            None,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(result.exit_code, Some(0));
+        assert_eq!(PathBuf::from(result.cwd), cwd);
     }
 
     struct TestWorkspace {

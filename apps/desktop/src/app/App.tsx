@@ -91,10 +91,14 @@ type AgentApprovalOptions = {
   rememberForRun?: boolean;
 };
 
-type AgentApprovalAutoRule = {
-  kind: "commandPrefix";
-  prefix: string;
-};
+type AgentApprovalAutoRule =
+  | {
+      kind: "commandPrefix";
+      prefix: string;
+    }
+  | {
+      kind: "applyPatch";
+    };
 
 function getCommandApprovalPrefix(action: AgentProposedAction) {
   if (action.type !== "command") return "";
@@ -105,6 +109,10 @@ function shouldAutoApproveAgentAction(
   action: AgentProposedAction,
   rules: AgentApprovalAutoRule[],
 ) {
+  if (action.type === "diff") {
+    return rules.some((rule) => rule.kind === "applyPatch");
+  }
+
   const command = getCommandApprovalPrefix(action);
   if (!command) return false;
 
@@ -1568,6 +1576,7 @@ export function App() {
       if (!activeConversationId) return;
       const conversationId = activeConversationId;
       const rememberedPrefix = options.rememberForRun ? getCommandApprovalPrefix(action) : "";
+      const rememberPatchesForRun = options.rememberForRun && action.type === "diff";
 
       if (rememberedPrefix) {
         const currentRules = approvalAutoRulesRef.current.get(messageId) ?? [];
@@ -1583,6 +1592,12 @@ export function App() {
               prefix: rememberedPrefix,
             },
           ]);
+        }
+      }
+      if (rememberPatchesForRun) {
+        const currentRules = approvalAutoRulesRef.current.get(messageId) ?? [];
+        if (!currentRules.some((rule) => rule.kind === "applyPatch")) {
+          approvalAutoRulesRef.current.set(messageId, [...currentRules, { kind: "applyPatch" }]);
         }
       }
 

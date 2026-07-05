@@ -49,7 +49,7 @@ impl AgentTool for WorkspaceMapTool {
                 }
             }),
             safety: AgentToolSafety::ReadOnly,
-            requires_workspace: true,
+            requires_workspace: false,
             requires_approval: false,
         }
     }
@@ -67,8 +67,12 @@ impl AgentTool for WorkspaceMapTool {
             .clamp(1, MAX_MAP_ENTRIES);
         let include_files = args.include_files.unwrap_or(true);
 
-        let workspace_root = context.workspace_root()?;
-        let focus_root = resolve_focus_root(context, &workspace_root, args.focus_path.as_deref())?;
+        let workspace_root = context.workspace_root_optional()?;
+        let focus_root = resolve_focus_root(
+            context,
+            workspace_root.as_deref(),
+            args.focus_path.as_deref(),
+        )?;
         let cancellation_token = context.cancellation_token();
         let focus_path =
             context.display_path(args.focus_path.as_deref().unwrap_or("."), &focus_root)?;
@@ -77,11 +81,10 @@ impl AgentTool for WorkspaceMapTool {
         } else {
             focus_path
         };
-        let display_root = if focus_root.starts_with(&workspace_root) {
-            workspace_root.as_path()
-        } else {
-            focus_root.as_path()
-        };
+        let display_root = workspace_root
+            .as_deref()
+            .filter(|workspace_root| focus_root.starts_with(workspace_root))
+            .unwrap_or(focus_root.as_path());
 
         let walk = walk_workspace_with_cancellation(&focus_root, &cancellation_token)?;
         let summary = build_summary(
@@ -157,17 +160,21 @@ struct FileCandidate {
 
 fn resolve_focus_root(
     context: &ToolExecutionContext,
-    workspace_root: &Path,
+    workspace_root: Option<&Path>,
     focus_path: Option<&str>,
 ) -> AgentResult<PathBuf> {
     let Some(focus_path) = focus_path.map(str::trim).filter(|path| !path.is_empty()) else {
-        return Ok(workspace_root.to_path_buf());
+        return workspace_root.map(Path::to_path_buf).ok_or_else(|| {
+            AgentError::new(
+                "当前没有 workspace；请使用 focusPath 指定绝对目录或 @desktop、@documents、@downloads、@home。",
+            )
+        });
     };
 
     let focus_root = context.resolve_existing_path(focus_path)?;
     if !focus_root.is_dir() {
         return Err(AgentError::new(
-            "workspace_map.focusPath 必须是 workspace 内的目录。",
+            "workspace_map.focusPath 必须是可访问的目录。",
         ));
     }
 

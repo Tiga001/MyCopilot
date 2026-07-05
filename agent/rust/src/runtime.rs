@@ -8,9 +8,9 @@ use crate::protocol::{
     AgentApprovalDecision, AgentApprovalDecisionStatus, AgentApprovalStatus, AgentChatInput,
     AgentChatMessage, AgentChatOutput, AgentCommandPermission, AgentError, AgentEvent,
     AgentInputAttachment, AgentInputAttachmentEncoding, AgentInputAttachmentKind,
-    AgentPromptPreferences, AgentProposedAction, AgentResult, AgentRunContext, AgentRunStatus,
-    AgentStateSnapshot, AgentToolCall, AgentToolContinuation, AgentToolDefinition, AgentToolResult,
-    AgentUsage, AgentWorkspaceContext,
+    AgentPatchPermission, AgentPromptPreferences, AgentProposedAction, AgentResult,
+    AgentRunContext, AgentRunStatus, AgentStateSnapshot, AgentToolCall, AgentToolContinuation,
+    AgentToolDefinition, AgentToolResult, AgentUsage, AgentWorkspaceContext,
 };
 use crate::tools::{ToolExecutionContext, ToolRegistry};
 use crate::usage::merge_total_usage;
@@ -142,6 +142,14 @@ impl AgentRuntime {
             .unwrap_or(AgentCommandPermission::RequireApproval);
         let command_auto_approve =
             command_permission == AgentCommandPermission::AutoApprove && host_executor.is_some();
+        let patch_auto_approve = context
+            .as_ref()
+            .map(|context| {
+                context.permissions.patch == AgentPatchPermission::AutoApprove
+                    && context.permissions.write != crate::protocol::AgentWritePermission::Denied
+            })
+            .unwrap_or(false)
+            && host_executor.is_some();
         let mut tool_definitions = tool_registry.definitions();
         apply_permission_policy_to_tool_definitions(&mut tool_definitions, context.as_ref());
         if command_auto_approve {
@@ -151,6 +159,17 @@ impl AgentRuntime {
             {
                 definition.requires_approval = false;
                 definition.description = "Run a validated shell command through the host execution layer. The current permission policy automatically approves this command request.".to_string();
+            }
+        }
+        if patch_auto_approve {
+            if let Some(definition) = tool_definitions
+                .iter_mut()
+                .find(|definition| definition.name == "apply_patch")
+            {
+                definition.requires_approval = false;
+                definition.description.push_str(
+                    " The current permission policy automatically approves validated patches.",
+                );
             }
         }
         let mut event_stream = AgentEventStream::new(emitter);
@@ -291,12 +310,14 @@ impl AgentRuntime {
                     .map(|definition| definition.requires_approval)
                     .unwrap_or(false);
                 let auto_execute_command = tool_name == "run_command" && command_auto_approve;
-                let requires_approval = definition_requires_approval && !auto_execute_command;
+                let auto_execute_patch = tool_name == "apply_patch" && patch_auto_approve;
+                let auto_execute_host_action = auto_execute_command || auto_execute_patch;
+                let requires_approval = definition_requires_approval && !auto_execute_host_action;
                 let call = AgentToolCall {
                     id: tool_request.id,
                     tool: tool_name,
                     args: tool_args,
-                    approval_status: if auto_execute_command {
+                    approval_status: if auto_execute_host_action {
                         AgentApprovalStatus::Approved
                     } else if requires_approval {
                         AgentApprovalStatus::Required
@@ -383,14 +404,20 @@ impl AgentRuntime {
                     });
                 }
 
-                let result_result = if auto_execute_command {
+                let result_result = if auto_execute_host_action {
                     match tool_registry.proposed_action(&tool_context, &call) {
                         Ok(action) => {
                             let action = approve_proposed_action(action);
+                            if let AgentProposedAction::Diff { diff } = &action {
+                                event_stream.emit(AgentEvent::Diff {
+                                    run_id: run_id.clone(),
+                                    diff: diff.clone(),
+                                });
+                            }
                             execute_host_action_on_blocking_thread(
                                 host_executor
                                     .as_ref()
-                                    .expect("auto command execution requires host executor")
+                                    .expect("automatic host action requires host executor")
                                     .clone(),
                                 action,
                                 cancellation_token.clone(),
@@ -575,23 +602,23 @@ fn apply_permission_policy_to_tool_definitions(
                     set_schema_property_description(
                         &mut definition.input_schema,
                         "path",
-                        "Workspace-relative path, absolute local path, or @attachments readPath.",
+                        "Workspace-relative path, absolute local path, @home/@desktop/@documents/@downloads, or @attachments readPath.",
                     );
                 }
                 "search_code" => set_schema_property_description(
                     &mut definition.input_schema,
                     "path",
-                    "Optional workspace-relative or absolute directory/file path to search.",
+                    "Optional workspace-relative or absolute directory/file path, or @home/@desktop/@documents/@downloads. Required when no workspace exists.",
                 ),
                 "search_files" => set_schema_property_description(
                     &mut definition.input_schema,
                     "path",
-                    "Optional workspace-relative or absolute directory path to search.",
+                    "Optional workspace-relative or absolute directory, or @home/@desktop/@documents/@downloads. Required when no workspace exists.",
                 ),
                 "workspace_map" => set_schema_property_description(
                     &mut definition.input_schema,
                     "focusPath",
-                    "Optional workspace-relative or absolute directory to summarize.",
+                    "Optional workspace-relative or absolute directory, or @home/@desktop/@documents/@downloads. Required when no workspace exists.",
                 ),
                 _ => {}
             }
@@ -603,11 +630,11 @@ fn apply_permission_policy_to_tool_definitions(
             .iter_mut()
             .filter(|definition| definition.name == "apply_patch")
         {
-            definition.description = "Create, update, or delete one text/code/config file through structured content or edits; Rust generates the unified diff. The target may be workspace-relative or an absolute local path. This is the required file-writing path; do not use run_command to write files. Applying the generated diff still requires host approval.".to_string();
+            definition.description = "Create, update, or delete one text/code/config file through structured content or edits; Rust generates the unified diff. The target may be workspace-relative, absolute, or use @home/@desktop/@documents/@downloads. This works without a workspace when write access allows all locations. Do not use run_command to write files. Applying the generated diff still requires host approval.".to_string();
             set_schema_property_description(
                 &mut definition.input_schema,
                 "filePath",
-                "Workspace-relative or absolute local file path to modify or create.",
+                "Workspace-relative or absolute local file path, or @home/@desktop/@documents/@downloads.",
             );
         }
         if let Some(definition) = definitions
@@ -617,7 +644,7 @@ fn apply_permission_policy_to_tool_definitions(
             set_schema_property_description(
                 &mut definition.input_schema,
                 "cwd",
-                "Optional workspace-relative or absolute working directory.",
+                "Workspace-relative or absolute working directory, or @home/@desktop/@documents/@downloads. Required when no workspace exists.",
             );
         }
     }

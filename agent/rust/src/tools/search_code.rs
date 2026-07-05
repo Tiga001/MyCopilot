@@ -13,19 +13,19 @@ impl AgentTool for SearchCodeTool {
     fn definition(&self) -> AgentToolDefinition {
         AgentToolDefinition {
             name: "search_code".to_string(),
-            description: "Search UTF-8 text content inside workspace files.".to_string(),
+            description: "Search UTF-8 text content in an accessible file or directory. With no workspace, provide an absolute path or a system alias such as @desktop.".to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "query": { "type": "string", "description": "Text to search for." },
-                    "path": { "type": "string", "description": "Optional workspace-relative directory or file to search within." },
+                    "path": { "type": "string", "description": "Optional workspace-relative or absolute directory/file, or @home/@desktop/@documents/@downloads. Defaults to workspace root when one exists." },
                     "limit": { "type": "integer", "minimum": 1, "maximum": MAX_SEARCH_LIMIT },
                     "caseSensitive": { "type": "boolean" }
                 },
                 "required": ["query"]
             }),
             safety: AgentToolSafety::ReadOnly,
-            requires_workspace: true,
+            requires_workspace: false,
             requires_approval: false,
         }
     }
@@ -41,7 +41,11 @@ impl AgentTool for SearchCodeTool {
         let cancellation_token = context.cancellation_token();
         let search_root = match args.path.as_deref().filter(|path| !path.trim().is_empty()) {
             Some(path) => context.resolve_existing_path(path)?,
-            None => context.workspace_root()?,
+            None => context.workspace_root_optional()?.ok_or_else(|| {
+                AgentError::new(
+                    "当前没有 workspace；search_code.path 必须指定绝对目录、文件或系统路径别名。",
+                )
+            })?,
         };
         let limit = sanitize_limit(args.limit);
         let case_sensitive = args.case_sensitive.unwrap_or(false);

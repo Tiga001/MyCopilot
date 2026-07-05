@@ -1,5 +1,5 @@
 use crate::agent_actions::pending::{AgentActionState, PendingAgentAction};
-use crate::fs::patch::{apply_unified_diff, PatchApplyResult};
+use crate::fs::patch::{apply_unified_diff_in_context, PatchApplyResult};
 use crate::git::diff::read_git_diff;
 use crate::permissions::policy_from_input;
 use crate::process::command_runner::{
@@ -9,8 +9,8 @@ use crate::storage::{chat_repository, now_ms, StorageState};
 use my_copilot_agent::{
     send_chat, AgentApprovalDecision, AgentApprovalDecisionStatus, AgentApprovalStatus,
     AgentCancellationToken, AgentChatInput, AgentChatOutput, AgentCommandRequest,
-    AgentDiffProposal, AgentPatchResult, AgentPatchResultStatus, AgentPermissions,
-    AgentProposedAction, AgentToolCall, AgentToolContinuation, AgentToolResult,
+    AgentDiffProposal, AgentPatchPermission, AgentPatchResult, AgentPatchResultStatus,
+    AgentPermissions, AgentProposedAction, AgentToolCall, AgentToolContinuation, AgentToolResult,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -243,25 +243,9 @@ async fn approve_diff_action(
     pending: PendingAgentAction,
     diff: AgentDiffProposal,
 ) -> Result<AgentActionExecutionOutput, String> {
-    let workspace_root = workspace_root(&pending.input);
+    let workspace_root = workspace_root_optional(&pending.input);
     let permissions = policy_from_input(&pending.input);
-    let execution = match workspace_root {
-        Ok(root) => apply_patch_and_read_diff(&root, &diff, permissions),
-        Err(error) => PatchExecution {
-            status: AgentActionExecutionStatus::Failed,
-            observation_ok: false,
-            result: AgentPatchResult {
-                status: AgentPatchResultStatus::Failed,
-                operation: diff.operation,
-                file_path: diff.file_path.clone(),
-                applied_file_paths: Vec::new(),
-                git_diff: None,
-                git_diff_error: None,
-                error: Some(error),
-                message: None,
-            },
-        },
-    };
+    let execution = apply_patch_and_read_diff(workspace_root.as_ref(), &diff, permissions);
 
     let mut input = pending.input.clone();
     input.approval_decision = Some(AgentApprovalDecision {
@@ -310,38 +294,17 @@ async fn approve_command_action(
     pending: PendingAgentAction,
     command: AgentCommandRequest,
 ) -> Result<AgentActionExecutionOutput, String> {
-    let workspace_root = workspace_root(&pending.input);
+    let workspace_root = workspace_root_optional(&pending.input);
     let permissions = policy_from_input(&pending.input);
-    let execution = match workspace_root {
-        Ok(root) => {
-            let guard = command_state.register(&pending.action_id);
-            run_command_and_capture(
-                &root,
-                &command,
-                permissions,
-                AgentCancellationToken::new(),
-                Some(guard.cancel_flag()),
-                false,
-            )
-        }
-        Err(error) => CommandExecution {
-            status: AgentActionExecutionStatus::Failed,
-            observation_ok: false,
-            result: AgentCommandExecutionResult {
-                command: command.command.clone(),
-                cwd: command.cwd.clone().unwrap_or_else(|| ".".to_string()),
-                exit_code: None,
-                stdout: String::new(),
-                stderr: String::new(),
-                timed_out: false,
-                cancelled: false,
-                duration_ms: 0,
-                stdout_truncated: false,
-                stderr_truncated: false,
-                error: Some(error),
-            },
-        },
-    };
+    let guard = command_state.register(&pending.action_id);
+    let execution = run_command_and_capture(
+        workspace_root.as_ref(),
+        &command,
+        permissions,
+        AgentCancellationToken::new(),
+        Some(guard.cancel_flag()),
+        false,
+    );
 
     let mut input = pending.input.clone();
     input.approval_decision = Some(AgentApprovalDecision {
@@ -516,12 +479,12 @@ fn tool_continuation_for_action(
 }
 
 fn apply_patch_and_read_diff(
-    root: &PathBuf,
+    root: Option<&PathBuf>,
     diff: &AgentDiffProposal,
     permissions: AgentPermissions,
 ) -> PatchExecution {
-    match apply_unified_diff(
-        root,
+    match apply_unified_diff_in_context(
+        root.map(PathBuf::as_path),
         diff.operation,
         &diff.file_path,
         &diff.patch,
@@ -547,19 +510,20 @@ fn apply_patch_and_read_diff(
 }
 
 fn successful_patch_execution(
-    root: &PathBuf,
+    root: Option<&PathBuf>,
     diff: &AgentDiffProposal,
     apply_result: PatchApplyResult,
 ) -> PatchExecution {
-    let (git_diff, git_diff_error) = if PathBuf::from(&diff.file_path).is_absolute()
-        && !PathBuf::from(&diff.file_path).starts_with(root)
-    {
-        (None, None)
-    } else {
-        match read_git_diff(root, Some(&diff.file_path)) {
+    let root_for_diff = root.filter(|root| {
+        !PathBuf::from(&diff.file_path).is_absolute()
+            || PathBuf::from(&diff.file_path).starts_with(root)
+    });
+    let (git_diff, git_diff_error) = match root_for_diff {
+        None => (None, None),
+        Some(root) => match read_git_diff(root, Some(&diff.file_path)) {
             Ok(git_diff) => (Some(git_diff), None),
             Err(error) => (None, Some(error)),
-        }
+        },
     };
 
     PatchExecution {
@@ -579,7 +543,7 @@ fn successful_patch_execution(
 }
 
 fn run_command_and_capture(
-    root: &PathBuf,
+    root: Option<&PathBuf>,
     command: &AgentCommandRequest,
     permissions: AgentPermissions,
     cancellation_token: AgentCancellationToken,
@@ -587,7 +551,7 @@ fn run_command_and_capture(
     automatic: bool,
 ) -> CommandExecution {
     match run_approved_command(
-        root,
+        root.map(PathBuf::as_path),
         command,
         permissions,
         cancellation_token,
@@ -616,7 +580,7 @@ fn run_command_and_capture(
 }
 
 pub(crate) fn execute_auto_command_tool_action(
-    root: &PathBuf,
+    root: Option<&PathBuf>,
     permissions: AgentPermissions,
     command: &AgentCommandRequest,
     cancellation_token: AgentCancellationToken,
@@ -636,6 +600,28 @@ pub(crate) fn execute_auto_command_tool_action(
         execution.observation_ok,
         &execution.result,
     )
+}
+
+pub(crate) fn execute_auto_patch_tool_action(
+    root: Option<&PathBuf>,
+    permissions: AgentPermissions,
+    diff: &AgentDiffProposal,
+) -> AgentToolResult {
+    if permissions.patch != AgentPatchPermission::AutoApprove {
+        let result = AgentPatchResult {
+            status: AgentPatchResultStatus::Failed,
+            operation: diff.operation,
+            file_path: diff.file_path.clone(),
+            applied_file_paths: Vec::new(),
+            git_diff: None,
+            git_diff_error: None,
+            error: Some("当前文件编辑权限不允许自动审批。".to_string()),
+            message: None,
+        };
+        return patch_tool_result(&diff.id, false, &result);
+    }
+    let execution = apply_patch_and_read_diff(root, diff, permissions);
+    patch_tool_result(&diff.id, execution.observation_ok, &execution.result)
 }
 
 fn successful_command_execution(result: CommandExecutionResult) -> CommandExecution {
@@ -703,14 +689,13 @@ fn status_for_run(status: my_copilot_agent::AgentRunStatus) -> Option<&'static s
     }
 }
 
-fn workspace_root(input: &AgentChatInput) -> Result<PathBuf, String> {
+fn workspace_root_optional(input: &AgentChatInput) -> Option<PathBuf> {
     input
         .context
         .as_ref()
         .and_then(|context| context.workspace.as_ref())
         .and_then(|workspace| workspace.root_path.as_ref())
         .map(PathBuf::from)
-        .ok_or_else(|| "没有已选择的 workspace，无法应用 patch。".to_string())
 }
 
 #[cfg(test)]
@@ -812,5 +797,4 @@ mod tests {
         );
         assert!(result.error.is_none());
     }
-
 }

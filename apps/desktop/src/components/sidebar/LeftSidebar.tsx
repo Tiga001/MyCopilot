@@ -38,6 +38,12 @@ type SidebarSectionScope = "projects" | "conversations";
 type SidebarSectionSubmenu = "organize" | "sort";
 type BulkArchiveScope = "projects" | "root";
 type ProjectDragPosition = "before" | "after";
+type ConversationListStage = "collapsed" | "preview" | "expanded";
+
+const COLLAPSED_CONVERSATION_COUNT = 5;
+const PREVIEW_CONVERSATION_COUNT = 10;
+const PREVIEW_CONVERSATION_THRESHOLD = 12;
+const ROOT_CONVERSATION_LIST_KEY = "root";
 
 interface ProjectDragTarget {
   projectId: string;
@@ -418,6 +424,7 @@ export function LeftSidebar({
   const [pendingArchiveProject, setPendingArchiveProject] = useState<AppProject | null>(null);
   const [pendingRemoveProject, setPendingRemoveProject] = useState<AppProject | null>(null);
   const [isAccountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [conversationListStages, setConversationListStages] = useState<Record<string, ConversationListStage>>({});
   const [draggingProjectId, setDraggingProjectId] = useState<string | null>(null);
   const [projectDragPreviewOrder, setProjectDragPreviewOrderState] = useState<string[] | null>(null);
   const [now, setNow] = useState(Date.now());
@@ -816,6 +823,62 @@ export function LeftSidebar({
     />
   );
 
+  const renderConversationCollection = (
+    listKey: string,
+    collection: ChatConversation[],
+    nested = false,
+  ) => {
+    const stage = conversationListStages[listKey] ?? "collapsed";
+    const shouldPaginate = collection.length > 7;
+    const visibleCount = !shouldPaginate || stage === "expanded"
+      ? collection.length
+      : stage === "preview"
+        ? PREVIEW_CONVERSATION_COUNT
+        : COLLAPSED_CONVERSATION_COUNT;
+    const visibleCollection = collection.slice(0, visibleCount);
+    const canExpand = visibleCollection.length < collection.length;
+    const canCollapse = shouldPaginate && stage !== "collapsed";
+
+    const expandCollection = () => {
+      setConversationListStages((currentStages) => ({
+        ...currentStages,
+        [listKey]: stage === "collapsed" && collection.length > PREVIEW_CONVERSATION_THRESHOLD
+          ? "preview"
+          : "expanded",
+      }));
+    };
+
+    const collapseCollection = () => {
+      setConversationListStages((currentStages) => ({
+        ...currentStages,
+        [listKey]: "collapsed",
+      }));
+    };
+
+    return (
+      <>
+        {visibleCollection.map((conversation) => renderConversationRow(conversation, nested))}
+        {shouldPaginate && (canExpand || canCollapse) && (
+          <div
+            className="left-sidebar__conversation-disclosure"
+            data-nested={nested || undefined}
+          >
+            {canExpand && (
+              <button type="button" onClick={expandCollection}>
+                {t("sidebar.expandConversations")}
+              </button>
+            )}
+            {canCollapse && (
+              <button type="button" onClick={collapseCollection}>
+                {t("sidebar.collapseConversations")}
+              </button>
+            )}
+          </div>
+        )}
+      </>
+    );
+  };
+
   const renderSectionMenu = (scope: SidebarSectionScope) => {
     const archiveCount = scope === "projects" ? projectArchiveAllCount : rootArchiveAllCount;
     const archiveScope: BulkArchiveScope = scope === "projects" ? "projects" : "root";
@@ -1112,7 +1175,7 @@ export function LeftSidebar({
 
         {isProjectOpen && projectConversations.length > 0 && (
           <div className="left-sidebar__project-conversations">
-            {projectConversations.map((conversation) => renderConversationRow(conversation, true))}
+            {renderConversationCollection(`project:${project.id}`, projectConversations, true)}
           </div>
         )}
       </div>
@@ -1208,7 +1271,7 @@ export function LeftSidebar({
           <p className="left-sidebar__empty-state">{t("sidebar.emptyConversations")}</p>
         ) : (
           <div className="left-sidebar__conversation-list">
-            {rootConversations.map((conversation) => renderConversationRow(conversation))}
+            {renderConversationCollection(ROOT_CONVERSATION_LIST_KEY, rootConversations)}
           </div>
         ))}
     </section>

@@ -52,6 +52,16 @@
   background: var(--mc-color-state-hover);
 }
 
+.general-permission-segment button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.general-permission-segment button:disabled:hover {
+  color: var(--settings-content-muted-color);
+  background: transparent;
+}
+
 .general-permission-segment button[data-selected="true"] {
   color: var(--settings-content-text-color);
   background: var(--mc-color-surface-elevated);

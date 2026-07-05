@@ -20,10 +20,13 @@ export type AgentWritePermission = "denied" | "workspace_only" | "all";
 
 export type AgentCommandPermission = "require_approval" | "auto_approve";
 
+export type AgentPatchPermission = "require_approval" | "auto_approve";
+
 export interface AgentPermissions {
   read: AgentReadPermission;
   write: AgentWritePermission;
   command: AgentCommandPermission;
+  patch: AgentPatchPermission;
 }
 
 export type AgentPromptWorkMode = "coding" | "general";

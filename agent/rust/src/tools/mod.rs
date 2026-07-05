@@ -21,6 +21,7 @@ use crate::protocol::{
     AgentProposedAction, AgentReadPermission, AgentResult, AgentRunContext, AgentSearchConfig,
     AgentSearchMode, AgentToolCall, AgentToolDefinition, AgentToolResult,
 };
+use crate::system_paths::expand_system_path;
 use apply_patch::ApplyPatchTool;
 use attachments::{AttachmentsListProjectTool, AttachmentsListTool};
 use git_diff::GitDiffTool;
@@ -230,11 +231,15 @@ impl ToolExecutionContext {
     }
 
     pub(super) fn workspace_root(&self) -> AgentResult<PathBuf> {
+        self.workspace_root_optional()?.ok_or_else(|| {
+            AgentError::new("当前没有 workspace；请为该工具提供绝对路径或系统路径别名。")
+        })
+    }
+
+    pub(super) fn workspace_root_optional(&self) -> AgentResult<Option<PathBuf>> {
         self.check_cancelled()?;
         let Some(root) = &self.workspace_root else {
-            return Err(AgentError::new(
-                "没有已选择的 workspace，无法使用文件或 Git 只读工具。",
-            ));
+            return Ok(None);
         };
 
         let root = root
@@ -244,7 +249,7 @@ impl ToolExecutionContext {
             return Err(AgentError::new("workspace 路径不是目录。"));
         }
 
-        Ok(root)
+        Ok(Some(root))
     }
 
     pub(super) fn permissions(&self) -> AgentPermissions {
@@ -258,6 +263,16 @@ impl ToolExecutionContext {
         }
 
         let input_path = input_path.trim();
+        if let Some(candidate) = expand_system_path(input_path).map_err(AgentError::new)? {
+            if self.permissions.read != AgentReadPermission::All {
+                return Err(AgentError::new(
+                    "读取系统路径别名需要将读取范围设为“所有位置”。",
+                ));
+            }
+            return candidate
+                .canonicalize()
+                .map_err(|error| AgentError::new(format!("路径不可访问：{error}")));
+        }
         let candidate = Path::new(input_path);
         if candidate.is_absolute() {
             if self.permissions.read != AgentReadPermission::All {
@@ -290,7 +305,25 @@ impl ToolExecutionContext {
                 .map(|reference| reference.read_path.clone());
         }
 
-        if let Ok(root) = self.workspace_root() {
+        if let Some(alias_path) = expand_system_path(input_path).map_err(AgentError::new)? {
+            if self.permissions.read != AgentReadPermission::All {
+                return Err(AgentError::new(
+                    "读取系统路径别名需要将读取范围设为“所有位置”。",
+                ));
+            }
+            let alias_path = alias_path
+                .canonicalize()
+                .map_err(|error| AgentError::new(format!("路径不可访问：{error}")))?;
+            if file_path == alias_path {
+                return Ok(input_path.trim_end_matches('/').to_string());
+            }
+            if let Ok(relative) = file_path.strip_prefix(&alias_path) {
+                let relative = relative_display(&alias_path, &alias_path.join(relative));
+                return Ok(format!("{}/{}", input_path.trim_end_matches('/'), relative));
+            }
+        }
+
+        if let Some(root) = self.workspace_root_optional()? {
             if file_path.starts_with(&root) {
                 return Ok(relative_display(&root, file_path));
             }
@@ -818,7 +851,7 @@ mod tests {
         let definition = registry.definition_for("run_command").unwrap();
 
         assert_eq!(definition.name, "run_command");
-        assert!(definition.requires_workspace);
+        assert!(!definition.requires_workspace);
         assert!(definition.requires_approval);
     }
 
@@ -828,7 +861,7 @@ mod tests {
         let definition = registry.definition_for("apply_patch").unwrap();
 
         assert_eq!(definition.name, "apply_patch");
-        assert!(definition.requires_workspace);
+        assert!(!definition.requires_workspace);
         assert!(definition.requires_approval);
     }
 

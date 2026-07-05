@@ -1,4 +1,4 @@
-import { FilePenLine, FilePlus2, FileX2 } from "lucide-react";
+import { Pencil } from "lucide-react";
 import type {
   AgentDiffProposal,
   AgentPatchOperation,
@@ -8,49 +8,53 @@ import type {
 } from "@agent";
 import type { TranslationKey } from "../../../../config/frontendTranslations";
 import { useFrontendConfig } from "../../../../config/FrontendConfigProvider";
+import { formatTranslation } from "../../../../config/translationFormat";
+import { revealStoredProjectFile } from "../../../storage/storageClient";
 import { AgentActivityDisclosure } from "./AgentActivityDisclosure";
 
 interface ApplyPatchToolActivityProps {
   cancelled?: boolean;
   call: AgentToolCall;
   diff?: AgentDiffProposal;
+  projectId?: string | null;
   result?: AgentToolResult;
+}
+
+export interface ApplyPatchToolActivityGroupItem extends ApplyPatchToolActivityProps {}
+
+interface ApplyPatchToolActivityGroupProps {
+  items: ApplyPatchToolActivityGroupItem[];
+  projectId?: string | null;
 }
 
 type ApplyPatchStatus = "waiting" | "running" | "applied" | "failed" | "rejected" | "cancelled";
 
-const LABELS: Record<AgentPatchOperation, Record<ApplyPatchStatus, TranslationKey>> = {
+const ROW_LABELS: Record<AgentPatchOperation, Record<ApplyPatchStatus, TranslationKey>> = {
   create: {
-    waiting: "agent.patch.create.waiting",
-    running: "agent.patch.create.running",
-    applied: "agent.patch.create.applied",
-    failed: "agent.patch.create.failed",
-    rejected: "agent.patch.create.rejected",
-    cancelled: "agent.patch.create.cancelled",
+    waiting: "agent.patch.create.row.waiting",
+    running: "agent.patch.create.row.running",
+    applied: "agent.patch.create.row.applied",
+    failed: "agent.patch.create.row.failed",
+    rejected: "agent.patch.create.row.rejected",
+    cancelled: "agent.patch.create.row.cancelled",
   },
   update: {
-    waiting: "agent.patch.update.waiting",
-    running: "agent.patch.update.running",
-    applied: "agent.patch.update.applied",
-    failed: "agent.patch.update.failed",
-    rejected: "agent.patch.update.rejected",
-    cancelled: "agent.patch.update.cancelled",
+    waiting: "agent.patch.update.row.waiting",
+    running: "agent.patch.update.row.running",
+    applied: "agent.patch.update.row.applied",
+    failed: "agent.patch.update.row.failed",
+    rejected: "agent.patch.update.row.rejected",
+    cancelled: "agent.patch.update.row.cancelled",
   },
   delete: {
-    waiting: "agent.patch.delete.waiting",
-    running: "agent.patch.delete.running",
-    applied: "agent.patch.delete.applied",
-    failed: "agent.patch.delete.failed",
-    rejected: "agent.patch.delete.rejected",
-    cancelled: "agent.patch.delete.cancelled",
+    waiting: "agent.patch.delete.row.waiting",
+    running: "agent.patch.delete.row.running",
+    applied: "agent.patch.delete.row.applied",
+    failed: "agent.patch.delete.row.failed",
+    rejected: "agent.patch.delete.row.rejected",
+    cancelled: "agent.patch.delete.row.cancelled",
   },
 };
-
-const ICONS = {
-  create: FilePlus2,
-  update: FilePenLine,
-  delete: FileX2,
-} satisfies Record<AgentPatchOperation, typeof FilePenLine>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -60,8 +64,16 @@ function getString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function getNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : undefined;
+}
+
 function getOperation(value: unknown): AgentPatchOperation | undefined {
   return value === "create" || value === "update" || value === "delete" ? value : undefined;
+}
+
+function isAbsoluteLocalPath(filePath: string) {
+  return filePath.startsWith("/") || /^[A-Za-z]:[\\/]/.test(filePath) || filePath.startsWith("\\\\");
 }
 
 function getPatchResult(result: AgentToolResult | undefined): AgentPatchResult | undefined {
@@ -86,68 +98,168 @@ function getCallArgs(call: AgentToolCall) {
   return isRecord(call.args) ? call.args : {};
 }
 
-function getStatus(
-  call: AgentToolCall,
-  result: AgentToolResult | undefined,
-  patchResult: AgentPatchResult | undefined,
-  cancelled: boolean,
-): ApplyPatchStatus {
+function getStatus(item: ApplyPatchToolActivityGroupItem): ApplyPatchStatus {
+  const patchResult = getPatchResult(item.result);
   if (patchResult?.status === "applied") return "applied";
   if (patchResult?.status === "failed") return "failed";
   if (patchResult?.status === "rejected") return "rejected";
-  if (result?.ok === false) return "failed";
-  if (call.approvalStatus === "rejected") return "rejected";
-  if (cancelled) return "cancelled";
-  if (call.approvalStatus === "required") return "waiting";
+  if (item.result?.ok === false) return "failed";
+  if (item.call.approvalStatus === "rejected") return "rejected";
+  if (item.cancelled) return "cancelled";
+  if (item.call.approvalStatus === "required") return "waiting";
   return "running";
 }
 
-export function ApplyPatchToolActivity({
-  cancelled = false,
-  call,
-  diff,
-  result,
-}: ApplyPatchToolActivityProps) {
+function countPatchLines(patch: string) {
+  return patch.split(/\r?\n/).reduce(
+    (counts, line) => {
+      if (line.startsWith("+++ ") || line.startsWith("--- ")) return counts;
+      if (line.startsWith("+")) counts.additions += 1;
+      if (line.startsWith("-")) counts.deletions += 1;
+      return counts;
+    },
+    { additions: 0, deletions: 0 },
+  );
+}
+
+function getItemView(item: ApplyPatchToolActivityGroupItem) {
+  const args = getCallArgs(item.call);
+  const patchResult = getPatchResult(item.result);
+  const resultValue = isRecord(item.result?.result) ? item.result.result : {};
+  const operation = patchResult?.operation ?? item.diff?.operation ?? getOperation(args.operation) ?? "update";
+  const filePath = patchResult?.filePath ?? item.diff?.filePath ?? getString(args.filePath);
+  const patch = item.diff?.patch ?? getString(args.patch);
+  const parsedCounts = countPatchLines(patch);
+  const additions = getNumber(resultValue.additions) ?? getNumber(args.additions) ?? parsedCounts.additions;
+  const deletions = getNumber(resultValue.deletions) ?? getNumber(args.deletions) ?? parsedCounts.deletions;
+
+  return {
+    additions,
+    deletions,
+    error: patchResult?.error ?? item.result?.error ?? "",
+    filePath,
+    message: patchResult?.message ?? "",
+    operation,
+    status: getStatus(item),
+  };
+}
+
+function getGroupLabel(
+  items: ApplyPatchToolActivityGroupItem[],
+  t: ReturnType<typeof useFrontendConfig>["t"],
+) {
+  const counts = items.reduce(
+    (currentCounts, item) => {
+      currentCounts[getStatus(item)] += 1;
+      return currentCounts;
+    },
+    { applied: 0, cancelled: 0, failed: 0, rejected: 0, running: 0, waiting: 0 },
+  );
+  const count = String(items.length);
+
+  if (counts.waiting > 0) {
+    return formatTranslation(t, "agent.patch.group.waiting", { count });
+  }
+  if (counts.running > 0) {
+    return formatTranslation(t, "agent.patch.group.running", { count });
+  }
+  if (counts.failed === 0 && counts.rejected === 0 && counts.cancelled === 0) {
+    return formatTranslation(t, "agent.patch.group.applied", { count });
+  }
+
+  const parts = [
+    counts.applied > 0
+      ? formatTranslation(t, "agent.patch.group.appliedCount", { count: String(counts.applied) })
+      : "",
+    counts.failed > 0
+      ? formatTranslation(t, "agent.patch.group.failedCount", { count: String(counts.failed) })
+      : "",
+    counts.rejected > 0
+      ? formatTranslation(t, "agent.patch.group.rejectedCount", { count: String(counts.rejected) })
+      : "",
+    counts.cancelled > 0
+      ? formatTranslation(t, "agent.patch.group.cancelledCount", { count: String(counts.cancelled) })
+      : "",
+  ].filter(Boolean);
+
+  return [formatTranslation(t, "agent.patch.group.processed", { count }), ...parts].join(
+    t("agent.separator"),
+  );
+}
+
+function ApplyPatchFileRow({
+  item,
+  projectId,
+}: {
+  item: ApplyPatchToolActivityGroupItem;
+  projectId?: string | null;
+}) {
   const { t } = useFrontendConfig();
-  const args = getCallArgs(call);
-  const patchResult = getPatchResult(result);
-  const operation = patchResult?.operation ?? diff?.operation ?? getOperation(args.operation) ?? "update";
-  const status = getStatus(call, result, patchResult, cancelled);
-  const filePath = patchResult?.filePath ?? diff?.filePath ?? getString(args.filePath);
-  const summary = (diff?.summary ?? getString(args.summary)) || call.reason;
-  const patch = diff?.patch ?? getString(args.patch);
-  const message = patchResult?.message;
-  const error = patchResult?.error ?? result?.error;
-  const hasDetails = Boolean(filePath || summary || patch || message || error);
-  const Icon = ICONS[operation];
+  const view = getItemView(item);
+  const note = view.message || view.error;
+  const canReveal = Boolean(view.filePath && (projectId || isAbsoluteLocalPath(view.filePath)));
+
+  return (
+    <div className="apply-patch-activity__item">
+      <div className="apply-patch-activity__item-line" title={view.filePath}>
+        <span>{t(ROW_LABELS[view.operation][view.status])}</span>
+        {canReveal ? (
+          <button
+            aria-label={formatTranslation(t, "agent.patch.revealFile", {
+              filePath: view.filePath,
+            })}
+            className="apply-patch-activity__path"
+            onClick={() => {
+              void revealStoredProjectFile(projectId, view.filePath).catch((error) => {
+                console.error("Failed to reveal patched file", error);
+              });
+            }}
+            title={formatTranslation(t, "agent.patch.revealFile", {
+              filePath: view.filePath,
+            })}
+            type="button"
+          >
+            {view.filePath}
+          </button>
+        ) : (
+          <span className="apply-patch-activity__path">{view.filePath}</span>
+        )}
+        <span className="apply-patch-activity__additions">+{view.additions}</span>
+        <span className="apply-patch-activity__deletions">-{view.deletions}</span>
+      </div>
+      {note ? <p className="apply-patch-activity__note">{note}</p> : null}
+    </div>
+  );
+}
+
+export function ApplyPatchToolActivity(props: ApplyPatchToolActivityProps) {
+  return <ApplyPatchToolActivityGroup items={[props]} projectId={props.projectId} />;
+}
+
+export function ApplyPatchToolActivityGroup({
+  items,
+  projectId,
+}: ApplyPatchToolActivityGroupProps) {
+  const { t } = useFrontendConfig();
+  if (items.length === 0) return null;
+  const isPending = items.some((item) => {
+    const status = getStatus(item);
+    return status === "waiting" || status === "running";
+  });
 
   return (
     <AgentActivityDisclosure
       className="agent-activity--apply-patch"
-      hasDetails={hasDetails}
-      icon={Icon}
-      isPending={status === "waiting" || status === "running"}
-      label={t(LABELS[operation][status])}
+      hasDetails
+      icon={Pencil}
+      isPending={isPending}
+      label={getGroupLabel(items, t)}
     >
-      {hasDetails ? (
-        <div className="agent-activity__details apply-patch-activity__details">
-          {filePath ? <p className="apply-patch-activity__path">{filePath}</p> : null}
-          {summary ? <p>{summary}</p> : null}
-          {message ? (
-            <p>
-              <span>{t("agent.patch.rejectReason")}</span>
-              {message}
-            </p>
-          ) : null}
-          {error ? (
-            <p className="apply-patch-activity__error">
-              <span>{t("agent.detail.error")}</span>
-              {error}
-            </p>
-          ) : null}
-          {patch ? <pre>{patch}</pre> : null}
-        </div>
-      ) : null}
+      <div className="agent-activity__details apply-patch-activity__details">
+        {items.map((item) => (
+          <ApplyPatchFileRow item={item} key={item.call.id} projectId={projectId} />
+        ))}
+      </div>
     </AgentActivityDisclosure>
   );
 }

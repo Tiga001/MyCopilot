@@ -59,6 +59,11 @@ React ChatComposer
 
 文件类工具都限制在用户已选择的 workspace 内，默认跳过 `.git`、`node_modules`、
 `dist`、`build`、`.venv`、`__pycache__`、`.next`、`target` 等目录，并限制文件大小和结果数量。
+当当前权限允许访问“所有位置”时，文件类工具也可以在没有 workspace 的对话中使用绝对路径，或使用
+`~`、`@home`、`@desktop`、`@documents`、`@downloads` 系统路径别名。`search_files`、`search_code`、
+`workspace_map` 在没有 workspace 时要求显式提供搜索路径；`run_command` 要求显式提供 cwd。`git_diff`
+仍然要求存在 workspace，因为它的语义依赖项目 Git 根目录。别名通过平台目录 API 解析：Windows 使用 Known Folder
+（包括 OneDrive/组策略重定向），Linux 使用 XDG user dirs，macOS 使用标准用户目录；系统未返回目录时才回退到主目录下的常见名称。
 `.docx`、`.pptx`、`.xlsx` 通过 OOXML zip/XML 解析；`.doc`、`.ppt`、`.xls` 是旧版二进制 Office
 格式，当前通过系统 `textutil` 做只读转换，转换器不可用或文件不兼容时会返回明确错误。
 `web_search` / `web_fetch` 是外部联网工具，只在 SQLite 配置里的搜索模式不是 `disabled` 且存在 Tavily API Key 时注册。

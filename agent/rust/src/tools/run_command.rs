@@ -3,6 +3,7 @@ use crate::protocol::{
     AgentApprovalStatus, AgentCommandRequest, AgentCommandRiskLevel, AgentError,
     AgentProposedAction, AgentResult, AgentToolCall, AgentToolDefinition, AgentToolSafety,
 };
+use crate::system_paths::expand_system_path;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -21,14 +22,14 @@ impl AgentTool for RunCommandTool {
                 "type": "object",
                 "properties": {
                     "command": { "type": "string", "description": "A single-line build, test, query, or program-execution command without literal newline or null characters. Do not use shell redirection, printf, echo, cat, tee, sed -i, or scripts to write file content." },
-                    "cwd": { "type": "string", "description": "Optional workspace-relative working directory. Defaults to workspace root." },
+                    "cwd": { "type": "string", "description": "Working directory. May be workspace-relative, absolute, or @home/@desktop/@documents/@downloads when permissions allow. Required when no workspace exists." },
                     "timeoutMs": { "type": "integer", "minimum": 1, "maximum": MAX_TIMEOUT_MS },
                     "reason": { "type": "string", "description": "Why this command is needed and what result is expected." }
                 },
                 "required": ["command"]
             }),
             safety: AgentToolSafety::RequiresApproval,
-            requires_workspace: true,
+            requires_workspace: false,
             requires_approval: true,
         }
     }
@@ -66,7 +67,7 @@ fn command_request_from_call(
     let args: RunCommandArgs = serde_json::from_value(call.args.clone())
         .map_err(|error| AgentError::new(format!("run_command 参数无效：{error}")))?;
     let command = sanitize_command(&args.command)?;
-    let cwd = sanitize_cwd(args.cwd, context.permissions().write)?;
+    let cwd = sanitize_cwd(context, args.cwd)?;
     let reason = args
         .reason
         .or_else(|| call.reason.clone())
@@ -108,17 +109,39 @@ fn sanitize_command(command: &str) -> AgentResult<String> {
 }
 
 fn sanitize_cwd(
+    context: &ToolExecutionContext,
     cwd: Option<String>,
-    write_permission: crate::protocol::AgentWritePermission,
 ) -> AgentResult<Option<String>> {
+    let workspace_exists = context.workspace_root_optional()?.is_some();
     let Some(cwd) = cwd else {
-        return Ok(None);
+        return if workspace_exists {
+            Ok(None)
+        } else {
+            Err(AgentError::new(
+                "当前没有 workspace；run_command.cwd 必须指定绝对目录或系统路径别名。",
+            ))
+        };
     };
     let cwd = cwd.trim();
     if cwd.is_empty() || cwd == "." {
-        return Ok(None);
+        return if workspace_exists {
+            Ok(None)
+        } else {
+            Err(AgentError::new(
+                "当前没有 workspace；run_command.cwd 不能省略或使用 `.`。",
+            ))
+        };
     }
 
+    let write_permission = context.permissions().write;
+    if let Some(expanded) = expand_system_path(cwd).map_err(AgentError::new)? {
+        if write_permission != crate::protocol::AgentWritePermission::All {
+            return Err(AgentError::new(
+                "命令使用系统路径别名需要将写入范围设为“所有位置”。",
+            ));
+        }
+        return Ok(Some(expanded.to_string_lossy().to_string()));
+    }
     if std::path::Path::new(cwd).is_absolute() {
         if write_permission != crate::protocol::AgentWritePermission::All {
             return Err(AgentError::new(
@@ -126,6 +149,12 @@ fn sanitize_cwd(
             ));
         }
         return Ok(Some(cwd.to_string()));
+    }
+
+    if !workspace_exists {
+        return Err(AgentError::new(
+            "没有 workspace 时，run_command.cwd 必须使用绝对目录或系统路径别名。",
+        ));
     }
 
     Ok(Some(
@@ -287,7 +316,8 @@ fn has_write_pattern(command: &str, program: &str) -> bool {
 mod tests {
     use super::*;
     use crate::protocol::{
-        AgentApprovalStatus, AgentPermissions, AgentRunContext, AgentToolCall, AgentWritePermission,
+        AgentApprovalStatus, AgentPermissions, AgentRunContext, AgentToolCall,
+        AgentWorkspaceContext, AgentWritePermission,
     };
     use serde_json::json;
 
@@ -308,7 +338,11 @@ mod tests {
         let context = ToolExecutionContext::from_run_context(Some(&AgentRunContext {
             conversation_id: None,
             project_id: None,
-            workspace: None,
+            workspace: Some(AgentWorkspaceContext {
+                project_id: None,
+                display_name: Some("temp".to_string()),
+                root_path: Some(std::env::temp_dir().to_string_lossy().to_string()),
+            }),
             attachment_library: None,
             permissions: AgentPermissions {
                 write: AgentWritePermission::WorkspaceOnly,
@@ -338,13 +372,43 @@ mod tests {
 
     #[test]
     fn rejects_cwd_outside_workspace() {
-        let error = sanitize_cwd(
-            Some("../outside".to_string()),
-            AgentWritePermission::WorkspaceOnly,
-        )
-        .unwrap_err();
+        let context = ToolExecutionContext::from_run_context(Some(&AgentRunContext {
+            conversation_id: None,
+            project_id: None,
+            workspace: Some(AgentWorkspaceContext {
+                project_id: None,
+                display_name: Some("temp".to_string()),
+                root_path: Some(std::env::temp_dir().to_string_lossy().to_string()),
+            }),
+            attachment_library: None,
+            permissions: AgentPermissions {
+                write: AgentWritePermission::WorkspaceOnly,
+                ..Default::default()
+            },
+        }));
+        let error = sanitize_cwd(&context, Some("../outside".to_string())).unwrap_err();
 
         assert!(error.to_string().contains("路径不能包含"));
+    }
+
+    #[test]
+    fn no_workspace_requires_explicit_cwd_and_accepts_alias_with_full_write() {
+        let context = ToolExecutionContext::from_run_context(Some(&AgentRunContext {
+            conversation_id: None,
+            project_id: None,
+            workspace: None,
+            attachment_library: None,
+            permissions: AgentPermissions {
+                write: AgentWritePermission::All,
+                ..Default::default()
+            },
+        }));
+
+        assert!(sanitize_cwd(&context, None).is_err());
+        let cwd = sanitize_cwd(&context, Some("@home".to_string()))
+            .unwrap()
+            .unwrap();
+        assert!(std::path::Path::new(&cwd).is_absolute());
     }
 
     #[test]

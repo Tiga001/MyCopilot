@@ -30,6 +30,7 @@ export type {
   AgentInputAttachmentKind,
   AgentMessageRole,
   AgentPatchOperation,
+  AgentPatchPermission,
   AgentPatchResult,
   AgentPatchResultStatus,
   AgentPromptDetailLevel,

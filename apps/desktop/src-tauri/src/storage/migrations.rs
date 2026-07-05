@@ -203,6 +203,12 @@ pub fn run_migrations(connection: &Connection) -> rusqlite::Result<()> {
         "custom_command_permission",
         "TEXT NOT NULL DEFAULT 'require_approval'",
     )?;
+    add_column_if_missing(
+        connection,
+        "ui_preferences",
+        "custom_patch_permission",
+        "TEXT NOT NULL DEFAULT 'require_approval'",
+    )?;
 
     connection.execute_batch(
         "

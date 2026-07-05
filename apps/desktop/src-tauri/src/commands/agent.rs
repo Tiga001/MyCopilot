@@ -1,4 +1,6 @@
-use crate::agent_actions::orchestrator::execute_auto_command_tool_action;
+use crate::agent_actions::orchestrator::{
+    execute_auto_command_tool_action, execute_auto_patch_tool_action,
+};
 use crate::agent_actions::pending::action_id;
 use crate::agent_actions::AgentActionState;
 use crate::fs::canonical_workspace_root;
@@ -224,33 +226,38 @@ fn build_host_action_executor(
     input: AgentChatInput,
 ) -> AgentHostActionExecutor {
     Arc::new(move |action, cancellation_token| {
-        let AgentProposedAction::Command { command } = action else {
-            return Err(AgentError::new(
-                "当前 host executor 只支持自动执行 run_command。",
-            ));
-        };
         let root = input
             .context
             .as_ref()
             .and_then(|context| context.workspace.as_ref())
             .and_then(|workspace| workspace.root_path.as_ref())
-            .map(PathBuf::from)
-            .ok_or_else(|| AgentError::new("没有已选择的 workspace，无法运行命令。"))?;
+            .map(PathBuf::from);
         let permissions = input
             .context
             .as_ref()
             .map(|context| context.permissions)
             .unwrap_or_default();
-        let command_state = app_handle.state::<CommandRunState>();
-        let guard = command_state.register(&command.id);
-
-        Ok(execute_auto_command_tool_action(
-            &root,
-            permissions,
-            &command,
-            cancellation_token,
-            Some(guard.cancel_flag()),
-        ))
+        match action {
+            AgentProposedAction::Command { command } => {
+                let command_state = app_handle.state::<CommandRunState>();
+                let guard = command_state.register(&command.id);
+                Ok(execute_auto_command_tool_action(
+                    root.as_ref(),
+                    permissions,
+                    &command,
+                    cancellation_token,
+                    Some(guard.cancel_flag()),
+                ))
+            }
+            AgentProposedAction::Diff { diff } => Ok(execute_auto_patch_tool_action(
+                root.as_ref(),
+                permissions,
+                &diff,
+            )),
+            AgentProposedAction::ToolCall { .. } => {
+                Err(AgentError::new("当前 host executor 不支持自动执行该工具。"))
+            }
+        }
     })
 }
 
