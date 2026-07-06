@@ -32,6 +32,8 @@ pub fn load_ui_preferences(connection: &Connection) -> rusqlite::Result<UiPrefer
                 custom_write_permission,
                 custom_command_permission,
                 custom_patch_permission,
+                full_permission_enabled,
+                custom_permission_enabled,
                 updated_at
             FROM ui_preferences
             WHERE id = 'default'
@@ -57,7 +59,9 @@ pub fn load_ui_preferences(connection: &Connection) -> rusqlite::Result<UiPrefer
                         command: parse_command_permission(row.get::<_, String>(12)?.as_str()),
                         patch: parse_patch_permission(row.get::<_, String>(13)?.as_str()),
                     },
-                    updated_at: row.get(14)?,
+                    full_permission_enabled: row.get::<_, i64>(14)? != 0,
+                    custom_permission_enabled: row.get::<_, i64>(15)? != 0,
+                    updated_at: row.get(16)?,
                 })
             },
         )
@@ -95,9 +99,11 @@ pub fn save_ui_preferences(
             custom_write_permission,
             custom_command_permission,
             custom_patch_permission,
+            full_permission_enabled,
+            custom_permission_enabled,
             updated_at
         )
-        VALUES ('default', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+        VALUES ('default', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
         ON CONFLICT(id) DO UPDATE SET
             sidebar_conversation_sort = excluded.sidebar_conversation_sort,
             sidebar_project_sort = excluded.sidebar_project_sort,
@@ -113,6 +119,8 @@ pub fn save_ui_preferences(
             custom_write_permission = excluded.custom_write_permission,
             custom_command_permission = excluded.custom_command_permission,
             custom_patch_permission = excluded.custom_patch_permission,
+            full_permission_enabled = excluded.full_permission_enabled,
+            custom_permission_enabled = excluded.custom_permission_enabled,
             updated_at = excluded.updated_at
         ",
         params![
@@ -142,6 +150,8 @@ pub fn save_ui_preferences(
             write_permission_value(preferences.custom_permissions.write),
             command_permission_value(preferences.custom_permissions.command),
             patch_permission_value(preferences.custom_permissions.patch),
+            if preferences.full_permission_enabled { 1 } else { 0 },
+            if preferences.custom_permission_enabled { 1 } else { 0 },
             timestamp,
         ],
     )?;
@@ -164,6 +174,8 @@ fn default_ui_preferences() -> UiPreferencesRecord {
         native_font_smoothing: false,
         show_token_usage_details: true,
         translucent_sidebar: false,
+        full_permission_enabled: true,
+        custom_permission_enabled: true,
         custom_permissions: AgentPermissions {
             read: AgentReadPermission::WorkspaceOnly,
             write: AgentWritePermission::WorkspaceOnly,
@@ -201,6 +213,8 @@ fn normalize_preferences(preferences: UiPreferencesRecord) -> UiPreferencesRecor
         native_font_smoothing: preferences.native_font_smoothing,
         show_token_usage_details: preferences.show_token_usage_details,
         translucent_sidebar: preferences.translucent_sidebar,
+        full_permission_enabled: preferences.full_permission_enabled,
+        custom_permission_enabled: preferences.custom_permission_enabled,
         custom_permissions: preferences.custom_permissions,
         updated_at: preferences.updated_at,
     }
@@ -332,6 +346,8 @@ mod tests {
         migrations::run_migrations(&connection).expect("test database should migrate");
 
         let mut preferences = load_ui_preferences(&connection).expect("preferences should load");
+        assert!(preferences.full_permission_enabled);
+        assert!(preferences.custom_permission_enabled);
         assert_eq!(
             preferences.custom_permissions,
             AgentPermissions {
@@ -348,9 +364,13 @@ mod tests {
             command: AgentCommandPermission::AutoApprove,
             patch: AgentPatchPermission::AutoApprove,
         };
+        preferences.full_permission_enabled = false;
+        preferences.custom_permission_enabled = false;
         save_ui_preferences(&connection, preferences).expect("preferences should save");
 
         let reloaded = load_ui_preferences(&connection).expect("preferences should reload");
+        assert!(!reloaded.full_permission_enabled);
+        assert!(!reloaded.custom_permission_enabled);
         assert_eq!(
             reloaded.custom_permissions,
             AgentPermissions {

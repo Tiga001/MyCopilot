@@ -1,8 +1,6 @@
 import { useState } from "react";
 import type { FocusEvent } from "react";
 import type {
-  AgentCommandPermission,
-  AgentPatchPermission,
   AgentReadPermission,
   AgentWritePermission,
 } from "@agent";
@@ -50,6 +48,30 @@ function PermissionSegment({ ariaLabel, disabled = false, onChange, options, val
   );
 }
 
+interface SettingsToggleProps {
+  checked: boolean;
+  disabled?: boolean;
+  label: string;
+  onChange?: (checked: boolean) => void;
+}
+
+function SettingsToggle({ checked, disabled = false, label, onChange }: SettingsToggleProps) {
+  return (
+    <button
+      aria-checked={checked}
+      aria-label={label}
+      className="settings-switch"
+      data-state={checked ? "on" : "off"}
+      disabled={disabled}
+      onClick={() => onChange?.(!checked)}
+      role="switch"
+      type="button"
+    >
+      <span className="settings-switch__thumb" aria-hidden="true" />
+    </button>
+  );
+}
+
 export function GeneralSettingsPage({ onUiPreferencesChange, uiPreferences }: GeneralSettingsPageProps) {
   const { language, setLanguage, t } = useFrontendConfig();
   const [isLanguageMenuOpen, setLanguageMenuOpen] = useState(false);
@@ -74,7 +96,8 @@ export function GeneralSettingsPage({ onUiPreferencesChange, uiPreferences }: Ge
     <article className="settings-list-page general-settings-page">
       <h1>{t("settings.page.general")}</h1>
 
-      <section className="settings-list-section" aria-labelledby="language-setting-heading">
+      <section className="settings-list-section" aria-labelledby="general-section-heading">
+        <h2 id="general-section-heading">{t("general.sectionGeneral")}</h2>
         <div className="settings-list general-settings-list">
           <div className="settings-list-row general-settings-language-row">
             <span className="settings-list-row__text">
@@ -127,6 +150,44 @@ export function GeneralSettingsPage({ onUiPreferencesChange, uiPreferences }: Ge
         </div>
       </section>
 
+      <section className="settings-list-section" aria-labelledby="permission-modes-heading">
+        <h2 id="permission-modes-heading">{t("general.sectionPermissions")}</h2>
+
+        <div className="settings-list general-permission-modes-list">
+          <div className="settings-list-row">
+            <span className="settings-list-row__text">
+              <span className="settings-list-row__title">{t("chat.defaultPermission")}</span>
+              <p className="settings-list-row__description">{t("general.defaultPermissionDescription")}</p>
+            </span>
+            <SettingsToggle checked disabled label={t("general.defaultPermissionLocked")} />
+          </div>
+
+          <div className="settings-list-row">
+            <span className="settings-list-row__text">
+              <span className="settings-list-row__title">{t("chat.fullPermission")}</span>
+              <p className="settings-list-row__description">{t("general.fullPermissionDescription")}</p>
+            </span>
+            <SettingsToggle
+              checked={uiPreferences.fullPermissionEnabled}
+              label={t("chat.fullPermission")}
+              onChange={(fullPermissionEnabled) => onUiPreferencesChange({ fullPermissionEnabled })}
+            />
+          </div>
+
+          <div className="settings-list-row">
+            <span className="settings-list-row__text">
+              <span className="settings-list-row__title">{t("chat.customPermission")}</span>
+              <p className="settings-list-row__description">{t("general.customPermissionDescription")}</p>
+            </span>
+            <SettingsToggle
+              checked={uiPreferences.customPermissionEnabled}
+              label={t("chat.customPermission")}
+              onChange={(customPermissionEnabled) => onUiPreferencesChange({ customPermissionEnabled })}
+            />
+          </div>
+        </div>
+      </section>
+
       <section className="settings-list-section" aria-labelledby="custom-permissions-heading">
         <h2 id="custom-permissions-heading">{t("general.customPermissions")}</h2>
 
@@ -166,39 +227,34 @@ export function GeneralSettingsPage({ onUiPreferencesChange, uiPreferences }: Ge
             </span>
           </div>
 
-          <div className="settings-list-row">
-            <span className="settings-list-row__text">
-              <span className="settings-list-row__title">{t("general.patchApproval")}</span>
-            </span>
-            <span className="settings-list-row__control">
-              <PermissionSegment
-                ariaLabel={t("general.patchApproval")}
-                disabled={uiPreferences.customPermissions.write === "denied"}
-                value={uiPreferences.customPermissions.patch}
-                options={[
-                  { value: "require_approval", label: t("general.yes") },
-                  { value: "auto_approve", label: t("general.no") },
-                ]}
-                onChange={(value) => updateCustomPermissions({ patch: value as AgentPatchPermission })}
+          {uiPreferences.customPermissions.write !== "denied" ? (
+            <div className="settings-list-row">
+              <span className="settings-list-row__text">
+                <span className="settings-list-row__title">{t("general.autoApproveFileEdits")}</span>
+                <p className="settings-list-row__description">{t("general.autoApproveFileEditsDescription")}</p>
+              </span>
+              <SettingsToggle
+                checked={uiPreferences.customPermissions.patch === "auto_approve"}
+                label={t("general.autoApproveFileEdits")}
+                onChange={(checked) =>
+                  updateCustomPermissions({ patch: checked ? "auto_approve" : "require_approval" })
+                }
               />
-            </span>
-          </div>
+            </div>
+          ) : null}
 
           <div className="settings-list-row">
             <span className="settings-list-row__text">
-              <span className="settings-list-row__title">{t("general.commandPermission")}</span>
+              <span className="settings-list-row__title">{t("general.autoApproveCommands")}</span>
+              <p className="settings-list-row__description">{t("general.autoApproveCommandsDescription")}</p>
             </span>
-            <span className="settings-list-row__control">
-              <PermissionSegment
-                ariaLabel={t("general.commandPermission")}
-                value={uiPreferences.customPermissions.command}
-                options={[
-                  { value: "require_approval", label: t("general.requireApproval") },
-                  { value: "auto_approve", label: t("general.autoApprove") },
-                ]}
-                onChange={(value) => updateCustomPermissions({ command: value as AgentCommandPermission })}
-              />
-            </span>
+            <SettingsToggle
+              checked={uiPreferences.customPermissions.command === "auto_approve"}
+              label={t("general.autoApproveCommands")}
+              onChange={(checked) =>
+                updateCustomPermissions({ command: checked ? "auto_approve" : "require_approval" })
+              }
+            />
           </div>
         </div>
       </section>

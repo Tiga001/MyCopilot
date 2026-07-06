@@ -27,7 +27,7 @@ interface ApplyPatchToolActivityGroupProps {
   projectId?: string | null;
 }
 
-type ApplyPatchStatus = "waiting" | "running" | "applied" | "failed" | "rejected" | "cancelled";
+export type ApplyPatchStatus = "waiting" | "running" | "applied" | "failed" | "rejected" | "cancelled";
 
 const ROW_LABELS: Record<AgentPatchOperation, Record<ApplyPatchStatus, TranslationKey>> = {
   create: {
@@ -56,12 +56,16 @@ const ROW_LABELS: Record<AgentPatchOperation, Record<ApplyPatchStatus, Translati
   },
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
-function getString(value: unknown) {
+export function getString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function getRawString(value: unknown) {
+  return typeof value === "string" ? value : "";
 }
 
 function getNumber(value: unknown) {
@@ -72,11 +76,11 @@ function getOperation(value: unknown): AgentPatchOperation | undefined {
   return value === "create" || value === "update" || value === "delete" ? value : undefined;
 }
 
-function isAbsoluteLocalPath(filePath: string) {
+export function isAbsoluteLocalPath(filePath: string) {
   return filePath.startsWith("/") || /^[A-Za-z]:[\\/]/.test(filePath) || filePath.startsWith("\\\\");
 }
 
-function getPatchResult(result: AgentToolResult | undefined): AgentPatchResult | undefined {
+export function getPatchResult(result: AgentToolResult | undefined): AgentPatchResult | undefined {
   if (!isRecord(result?.result)) return undefined;
   const status = result.result.status;
   const operation = getOperation(result.result.operation);
@@ -110,7 +114,7 @@ function getStatus(item: ApplyPatchToolActivityGroupItem): ApplyPatchStatus {
   return "running";
 }
 
-function countPatchLines(patch: string) {
+export function countPatchLines(patch: string) {
   return patch.split(/\r?\n/).reduce(
     (counts, line) => {
       if (line.startsWith("+++ ") || line.startsWith("--- ")) return counts;
@@ -122,14 +126,65 @@ function countPatchLines(patch: string) {
   );
 }
 
-function getItemView(item: ApplyPatchToolActivityGroupItem) {
+function countTextLines(content: string) {
+  const normalized = content.replace(/\r\n/g, "\n").replace(/\n$/, "");
+  if (!normalized) return 0;
+  return normalized.split("\n").length;
+}
+
+function countStructuredEditLines(edits: unknown) {
+  if (!Array.isArray(edits)) return undefined;
+
+  return edits.reduce(
+    (counts, edit) => {
+      if (!isRecord(edit)) return counts;
+      const kind = getString(edit.kind);
+      if (kind === "replace") {
+        counts.additions += countTextLines(getRawString(edit.newText));
+        counts.deletions += countTextLines(getRawString(edit.oldText));
+        return counts;
+      }
+
+      if (
+        kind === "insert_before" ||
+        kind === "insert_after" ||
+        kind === "append" ||
+        kind === "prepend"
+      ) {
+        counts.additions += countTextLines(getRawString(edit.text));
+      }
+
+      return counts;
+    },
+    { additions: 0, deletions: 0 },
+  );
+}
+
+function getGitDiffPatch(value: unknown) {
+  if (!isRecord(value)) return "";
+  return getRawString(value.patch);
+}
+
+function getFallbackLineCounts(args: Record<string, unknown>, operation: AgentPatchOperation) {
+  const structuredCounts = countStructuredEditLines(args.edits);
+  if (structuredCounts) return structuredCounts;
+
+  const content = getRawString(args.content);
+  if (content && operation === "create") {
+    return { additions: countTextLines(content), deletions: 0 };
+  }
+
+  return { additions: 0, deletions: 0 };
+}
+
+export function getApplyPatchItemView(item: ApplyPatchToolActivityGroupItem) {
   const args = getCallArgs(item.call);
   const patchResult = getPatchResult(item.result);
   const resultValue = isRecord(item.result?.result) ? item.result.result : {};
   const operation = patchResult?.operation ?? item.diff?.operation ?? getOperation(args.operation) ?? "update";
   const filePath = patchResult?.filePath ?? item.diff?.filePath ?? getString(args.filePath);
-  const patch = item.diff?.patch ?? getString(args.patch);
-  const parsedCounts = countPatchLines(patch);
+  const patch = item.diff?.patch || getRawString(args.patch) || getGitDiffPatch(resultValue.gitDiff);
+  const parsedCounts = patch ? countPatchLines(patch) : getFallbackLineCounts(args, operation);
   const additions = getNumber(resultValue.additions) ?? getNumber(args.additions) ?? parsedCounts.additions;
   const deletions = getNumber(resultValue.deletions) ?? getNumber(args.deletions) ?? parsedCounts.deletions;
 
@@ -195,7 +250,7 @@ function ApplyPatchFileRow({
   projectId?: string | null;
 }) {
   const { t } = useFrontendConfig();
-  const view = getItemView(item);
+  const view = getApplyPatchItemView(item);
   const note = view.message || view.error;
   const canReveal = Boolean(view.filePath && (projectId || isAbsoluteLocalPath(view.filePath)));
 

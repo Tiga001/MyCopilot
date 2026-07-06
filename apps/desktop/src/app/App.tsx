@@ -1859,6 +1859,10 @@ export function App() {
               draft={newConversationDraft}
               onDraftChange={(draft) => updateComposerDraft(NEW_CONVERSATION_DRAFT_ID, draft)}
               onSubmitMessage={createConversationFromMessage}
+              permissionModeAvailability={{
+                custom: uiPreferences.customPermissionEnabled,
+                full: uiPreferences.fullPermissionEnabled,
+              }}
             />
           )}
           {workspaceView === "conversation" && activeConversation && activeConversationDraft && (
@@ -1872,6 +1876,10 @@ export function App() {
               onMessageUiStateChange={updateMessageUiState}
               onStopGenerating={stopActiveGeneration}
               onSubmitMessage={appendMessageToActiveConversation}
+              permissionModeAvailability={{
+                custom: uiPreferences.customPermissionEnabled,
+                full: uiPreferences.fullPermissionEnabled,
+              }}
               showTokenUsageDetails={uiPreferences.showTokenUsageDetails}
             />
           )}

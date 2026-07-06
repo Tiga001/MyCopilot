@@ -17,6 +17,26 @@
   grid-template-columns: minmax(120px, 1fr) minmax(320px, 58%);
 }
 
+.general-permission-modes-list .settings-list-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-height: 88px;
+  padding-block: 16px;
+}
+
+.general-permission-modes-list .settings-list-row__description {
+  max-width: 680px;
+}
+
+.general-permissions-list .settings-list-row:has(> .settings-switch) {
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-height: 72px;
+}
+
+.general-settings-page .settings-switch:disabled {
+  opacity: 0.62;
+  cursor: default;
+}
+
 .general-permission-segment {
   display: grid;
   grid-auto-columns: minmax(0, 1fr);
@@ -180,5 +200,15 @@
 
   .general-permissions-list .settings-list-row {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .general-permission-modes-list .settings-list-row,
+  .general-permissions-list .settings-list-row:has(> .settings-switch) {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .general-permission-modes-list .settings-switch,
+  .general-permissions-list .settings-switch {
+    justify-self: end;
   }
 }

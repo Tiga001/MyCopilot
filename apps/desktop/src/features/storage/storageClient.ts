@@ -120,6 +120,8 @@ export interface UiPreferencesSnapshot {
   nativeFontSmoothing: boolean;
   showTokenUsageDetails: boolean;
   translucentSidebar: boolean;
+  fullPermissionEnabled: boolean;
+  customPermissionEnabled: boolean;
   customPermissions: AgentPermissions;
   updatedAt: number;
 }
@@ -533,6 +535,8 @@ export function defaultUiPreferences(): UiPreferencesSnapshot {
     nativeFontSmoothing: false,
     showTokenUsageDetails: true,
     translucentSidebar: false,
+    fullPermissionEnabled: true,
+    customPermissionEnabled: true,
     customPermissions: {
       read: "workspace_only",
       write: "workspace_only",
@@ -568,6 +572,14 @@ function normalizeUiPreferences(preferences: UiPreferencesSnapshot | null | unde
         ? preferences.showTokenUsageDetails
         : defaults.showTokenUsageDetails,
     translucentSidebar: Boolean(preferences.translucentSidebar),
+    fullPermissionEnabled:
+      typeof preferences.fullPermissionEnabled === "boolean"
+        ? preferences.fullPermissionEnabled
+        : defaults.fullPermissionEnabled,
+    customPermissionEnabled:
+      typeof preferences.customPermissionEnabled === "boolean"
+        ? preferences.customPermissionEnabled
+        : defaults.customPermissionEnabled,
     customPermissions: normalizeAgentPermissions(preferences.customPermissions),
     updatedAt: preferences.updatedAt ?? 0,
   };

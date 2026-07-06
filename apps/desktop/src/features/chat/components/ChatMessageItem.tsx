@@ -27,6 +27,7 @@ import {
   getAttachmentPreviewUrl,
 } from "../attachmentDisplay";
 import { ChatMarkdown } from "./ChatMarkdown";
+import { EditSummaryCard } from "./EditSummaryCard";
 import { AgentToolActivity } from "./toolActivities/AgentToolActivity";
 import {
   ApplyPatchToolActivityGroup,
@@ -801,6 +802,7 @@ function AgentRunView({
       {showFinalContent && (
         <ChatMarkdown className="chat-agent-text" content={finalAnswerContent} />
       )}
+      {isRunSettled(run) && <EditSummaryCard projectId={projectId} run={run} />}
       {isRunSettled(run) && <AssistantSources sources={webSearchSources} />}
       {showTokenLimitNotice && (
         <div className="agent-run__notice" role="status">

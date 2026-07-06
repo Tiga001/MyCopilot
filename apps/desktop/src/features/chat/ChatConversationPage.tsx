@@ -24,6 +24,10 @@ interface ChatConversationPageProps {
   onStopGenerating?: () => void;
   onSubmitMessage: (message: string, options: ChatSubmitOptions) => void;
   onMessageUiStateChange?: (messageId: string, uiState: ChatConversation["messages"][number]["uiState"]) => void;
+  permissionModeAvailability: {
+    custom: boolean;
+    full: boolean;
+  };
   showTokenUsageDetails: boolean;
 }
 
@@ -63,6 +67,7 @@ export function ChatConversationPage({
   onStopGenerating,
   onSubmitMessage,
   onMessageUiStateChange,
+  permissionModeAvailability,
   showTokenUsageDetails,
 }: ChatConversationPageProps) {
   const messagesRef = useRef<HTMLDivElement>(null);
@@ -122,6 +127,7 @@ export function ChatConversationPage({
             onDraftChange={onComposerDraftChange}
             onStopGenerating={onStopGenerating}
             onSubmitMessage={onSubmitMessage}
+            permissionModeAvailability={permissionModeAvailability}
           />
         )}
       </div>

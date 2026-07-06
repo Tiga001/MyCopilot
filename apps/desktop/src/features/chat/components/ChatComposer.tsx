@@ -59,6 +59,10 @@ interface ChatComposerProps {
   onDraftChange: (draft: ChatComposerDraft) => void;
   onSubmitMessage?: (message: string, options: ChatSubmitOptions) => void;
   onStopGenerating?: () => void;
+  permissionModeAvailability?: {
+    custom: boolean;
+    full: boolean;
+  };
   showProjectSelector?: boolean;
 }
 
@@ -69,6 +73,7 @@ export function ChatComposer({
   onDraftChange,
   onSubmitMessage,
   onStopGenerating,
+  permissionModeAvailability = { custom: true, full: true },
   showProjectSelector = false,
 }: ChatComposerProps) {
   const { t } = useFrontendConfig();
@@ -91,14 +96,26 @@ export function ChatComposer({
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [projectSearch, setProjectSearch] = useState("");
   const message = draft.message;
-  const permissionMode = draft.permissionMode;
+  const permissionOptions = useMemo(
+    () =>
+      PERMISSION_OPTIONS.filter(
+        (option) =>
+          option.id === "default"
+          || (option.id === "full" && permissionModeAvailability.full)
+          || (option.id === "custom" && permissionModeAvailability.custom),
+      ),
+    [permissionModeAvailability.custom, permissionModeAvailability.full],
+  );
+  const permissionMode = permissionOptions.some((option) => option.id === draft.permissionMode)
+    ? draft.permissionMode
+    : "default";
   const selectedProjectId = draft.projectId;
   const selectedModelId = draft.modelId;
   const attachments = useMemo(
     () => draft.attachments.map(composerAttachmentFromAgentAttachment),
     [draft.attachments],
   );
-  const selectedPermission = PERMISSION_OPTIONS.find((option) => option.id === permissionMode) ?? PERMISSION_OPTIONS[0];
+  const selectedPermission = permissionOptions.find((option) => option.id === permissionMode) ?? PERMISSION_OPTIONS[0];
   const SelectedPermissionIcon = selectedPermission.icon;
   const selectedModel = useMemo(() => {
     return enabledModels.find((model) => model.id === selectedModelId) ?? enabledModels[0];
@@ -144,6 +161,12 @@ export function ChatComposer({
       ...nextDraft,
     });
   };
+
+  useEffect(() => {
+    if (draft.permissionMode !== permissionMode) {
+      updateDraft({ permissionMode });
+    }
+  }, [draft.permissionMode, permissionMode]);
 
   const appendAttachments = (nextAttachments: ComposerAttachment[]) => {
     if (nextAttachments.length === 0) return;
@@ -500,7 +523,7 @@ export function ChatComposer({
 
           {isPermissionMenuOpen && (
             <div className="composer-permission-menu" role="listbox" aria-label={t("chat.selectPermission")}>
-              {PERMISSION_OPTIONS.map((option) => {
+              {permissionOptions.map((option) => {
                 const OptionIcon = option.icon;
                 const isSelected = option.id === permissionMode;
 

@@ -14,9 +14,9 @@
 .usage-models-panel h2 {
   margin: 0;
   color: var(--settings-content-text-color);
-  font-size: calc(var(--mc-font-size-sidebar-action) - 1px);
+  font-size: var(--mc-font-size-settings-section-heading);
   font-weight: var(--mc-font-weight-strong);
-  line-height: var(--mc-line-height-sidebar);
+  line-height: var(--mc-line-height-control);
 }
 
 .usage-summary-actions {

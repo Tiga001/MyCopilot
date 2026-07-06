@@ -10,7 +10,7 @@
 .personalization-section-heading h2 {
   margin: 0;
   color: var(--settings-content-title-color);
-  font-size: var(--mc-font-size-settings-section-title);
+  font-size: var(--mc-font-size-settings-section-heading);
   font-weight: var(--mc-font-weight-strong);
   line-height: var(--mc-line-height-control);
 }

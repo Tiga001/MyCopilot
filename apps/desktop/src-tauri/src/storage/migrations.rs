@@ -209,6 +209,18 @@ pub fn run_migrations(connection: &Connection) -> rusqlite::Result<()> {
         "custom_patch_permission",
         "TEXT NOT NULL DEFAULT 'require_approval'",
     )?;
+    add_column_if_missing(
+        connection,
+        "ui_preferences",
+        "full_permission_enabled",
+        "INTEGER NOT NULL DEFAULT 1",
+    )?;
+    add_column_if_missing(
+        connection,
+        "ui_preferences",
+        "custom_permission_enabled",
+        "INTEGER NOT NULL DEFAULT 1",
+    )?;
 
     connection.execute_batch(
         "

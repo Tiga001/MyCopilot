@@ -9,6 +9,10 @@ interface NewConversationPageProps {
   defaultProjectId?: string | null;
   onDraftChange: (draft: ChatComposerDraft) => void;
   onSubmitMessage: (message: string, options: ChatSubmitOptions) => void;
+  permissionModeAvailability: {
+    custom: boolean;
+    full: boolean;
+  };
 }
 
 export function NewConversationPage({
@@ -16,6 +20,7 @@ export function NewConversationPage({
   draft,
   onDraftChange,
   onSubmitMessage,
+  permissionModeAvailability,
 }: NewConversationPageProps) {
   const { t } = useFrontendConfig();
   const { projects } = useProjectSettings();
@@ -33,6 +38,7 @@ export function NewConversationPage({
           defaultProjectId={defaultProjectId}
           draft={draft}
           onDraftChange={onDraftChange}
+          permissionModeAvailability={permissionModeAvailability}
           showProjectSelector
           onSubmitMessage={onSubmitMessage}
         />

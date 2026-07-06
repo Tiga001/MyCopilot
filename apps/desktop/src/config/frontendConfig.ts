@@ -28,6 +28,7 @@ export const frontendConfig = {
       titleSize: "24px",
       navSize: "14px",
       bodySize: "14px",
+      sectionHeadingSize: "16px",
       sectionTitleSize: "16px",
     },
     configuration: {
@@ -180,6 +181,7 @@ export function getFrontendCssVariables(
     "--mc-font-size-settings-title": config.typography.settings.titleSize,
     "--mc-font-size-settings-nav": config.typography.settings.navSize,
     "--mc-font-size-settings-body": config.typography.settings.bodySize,
+    "--mc-font-size-settings-section-heading": config.typography.settings.sectionHeadingSize,
     "--mc-font-size-settings-section-title": config.typography.settings.sectionTitleSize,
     "--mc-font-size-configuration-title": config.typography.configuration.titleSize,
     "--mc-font-size-configuration-heading": config.typography.configuration.headingSize,
