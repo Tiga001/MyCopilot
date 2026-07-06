@@ -27,6 +27,41 @@
   max-width: 680px;
 }
 
+.general-permission-drawer {
+  display: grid;
+  grid-template-rows: 0fr;
+  min-height: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition:
+    grid-template-rows 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 160ms ease;
+}
+
+.general-permission-drawer[data-open="true"] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.general-permission-drawer__inner {
+  min-height: 0;
+  overflow: hidden;
+  transform: translateY(-12px);
+  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.general-permission-drawer[data-open="true"] .general-permission-drawer__inner {
+  transform: translateY(0);
+}
+
+.general-permission-drawer[data-open="false"] .settings-list-row {
+  pointer-events: none;
+}
+
+.general-permission-drawer .settings-list-row {
+  border-bottom: 1px solid var(--mc-color-border-subtle);
+}
+
 .general-permissions-list .settings-list-row:has(> .settings-switch) {
   grid-template-columns: minmax(0, 1fr) auto;
   min-height: 72px;
@@ -210,5 +245,12 @@
   .general-permission-modes-list .settings-switch,
   .general-permissions-list .settings-switch {
     justify-self: end;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .general-permission-drawer,
+  .general-permission-drawer__inner {
+    transition-duration: 1ms;
   }
 }

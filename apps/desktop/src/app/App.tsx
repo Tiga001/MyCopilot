@@ -817,6 +817,11 @@ export function App() {
         projectId: activeConversation.projectId,
       })
     : null;
+  const activeWorkspaceProjectId =
+    workspaceView === "conversation" ? activeConversation?.projectId ?? null : newConversationDraft.projectId ?? null;
+  const activeWorkspaceProject = activeWorkspaceProjectId
+    ? projects.find((project) => project.id === activeWorkspaceProjectId)
+    : null;
 
   const cleanupRunBinding = useCallback((runId: string) => {
     activeRunBindingsRef.current.delete(runId);
@@ -1894,7 +1899,10 @@ export function App() {
       )}
 
       <div className="side-panel side-panel--right">
-        <RightSidebar />
+        <RightSidebar
+          workspaceName={activeWorkspaceProject?.name ?? null}
+          workspacePath={activeWorkspaceProject?.path}
+        />
       </div>
     </div>
   );

@@ -123,7 +123,7 @@ button {
 }
 
 .side-panel--right {
-  z-index: 10;
+  z-index: 30;
   background: var(--right-panel);
   border-left: 1px solid var(--hairline);
 }

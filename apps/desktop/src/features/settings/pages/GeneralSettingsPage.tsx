@@ -77,6 +77,7 @@ export function GeneralSettingsPage({ onUiPreferencesChange, uiPreferences }: Ge
   const [isLanguageMenuOpen, setLanguageMenuOpen] = useState(false);
   const selectedLanguage =
     LANGUAGE_DISPLAY_OPTIONS.find((option) => option.value === language) ?? LANGUAGE_DISPLAY_OPTIONS[0];
+  const canAutoApproveFileEdits = uiPreferences.customPermissions.write !== "denied";
 
   const closeLanguageMenuOnBlur = (event: FocusEvent<HTMLSpanElement>) => {
     if (!event.currentTarget.contains(event.relatedTarget)) {
@@ -227,21 +228,28 @@ export function GeneralSettingsPage({ onUiPreferencesChange, uiPreferences }: Ge
             </span>
           </div>
 
-          {uiPreferences.customPermissions.write !== "denied" ? (
-            <div className="settings-list-row">
-              <span className="settings-list-row__text">
-                <span className="settings-list-row__title">{t("general.autoApproveFileEdits")}</span>
-                <p className="settings-list-row__description">{t("general.autoApproveFileEditsDescription")}</p>
-              </span>
-              <SettingsToggle
-                checked={uiPreferences.customPermissions.patch === "auto_approve"}
-                label={t("general.autoApproveFileEdits")}
-                onChange={(checked) =>
-                  updateCustomPermissions({ patch: checked ? "auto_approve" : "require_approval" })
-                }
-              />
+          <div
+            className="general-permission-drawer"
+            data-open={canAutoApproveFileEdits ? "true" : "false"}
+            aria-hidden={!canAutoApproveFileEdits}
+          >
+            <div className="general-permission-drawer__inner">
+              <div className="settings-list-row">
+                <span className="settings-list-row__text">
+                  <span className="settings-list-row__title">{t("general.autoApproveFileEdits")}</span>
+                  <p className="settings-list-row__description">{t("general.autoApproveFileEditsDescription")}</p>
+                </span>
+                <SettingsToggle
+                  checked={uiPreferences.customPermissions.patch === "auto_approve"}
+                  disabled={!canAutoApproveFileEdits}
+                  label={t("general.autoApproveFileEdits")}
+                  onChange={(checked) =>
+                    updateCustomPermissions({ patch: checked ? "auto_approve" : "require_approval" })
+                  }
+                />
+              </div>
             </div>
-          ) : null}
+          </div>
 
           <div className="settings-list-row">
             <span className="settings-list-row__text">

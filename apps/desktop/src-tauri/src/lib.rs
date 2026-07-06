@@ -5,6 +5,7 @@ mod git;
 mod permissions;
 mod process;
 mod storage;
+mod terminal;
 
 use tauri::Manager;
 
@@ -41,6 +42,7 @@ pub fn run() {
             app.manage(agent_actions::AgentActionState::default());
             app.manage(commands::agent::AgentRunCancellationState::default());
             app.manage(process::command_runner::CommandRunState::default());
+            app.manage(terminal::TerminalSessionState::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -55,6 +57,10 @@ pub fn run() {
             commands::usage::agent_get_usage_summary,
             commands::usage::agent_clear_usage_records,
             commands::system::open_external_url,
+            terminal::commands::terminal_create_session,
+            terminal::commands::terminal_write_input,
+            terminal::commands::terminal_resize_session,
+            terminal::commands::terminal_kill_session,
             storage::commands::load_app_data,
             storage::commands::load_model_settings,
             storage::commands::save_model_settings,
