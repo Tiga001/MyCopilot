@@ -1,5 +1,6 @@
 import { NotebookText, Trash2 } from "lucide-react";
 import { useState } from "react";
+import { ConfirmationDialog } from "../../../components/dialog/ConfirmationDialog";
 import { useFrontendConfig } from "../../../config/FrontendConfigProvider";
 import { useProjectSettings } from "../../../config/ProjectSettingsProvider";
 import type { AppProject } from "../../../config/projectConfig";
@@ -46,39 +47,17 @@ export function EnvironmentSettingsPage() {
       </section>
 
       {pendingDeleteProject && (
-        <div className="environment-remove-dialog" role="dialog" aria-modal="true">
-          <div className="environment-remove-dialog__card">
-            <button
-              className="environment-remove-dialog__close"
-              type="button"
-              aria-label={t("environment.cancelRemoveProject")}
-              onClick={() => setPendingDeleteProject(null)}
-            >
-              ×
-            </button>
-            <h2>{t("environment.removeProjectTitle").replace("{projectName}", pendingDeleteProject.name)}</h2>
-            <p>{t("environment.removeProjectDescription")}</p>
-            <div className="environment-remove-dialog__actions">
-              <button
-                className="environment-remove-dialog__cancel"
-                type="button"
-                onClick={() => setPendingDeleteProject(null)}
-              >
-                {t("environment.cancelRemoveProject")}
-              </button>
-              <button
-                className="environment-remove-dialog__confirm"
-                type="button"
-                onClick={() => {
-                  deleteProject(pendingDeleteProject.id);
-                  setPendingDeleteProject(null);
-                }}
-              >
-                {t("environment.confirmRemoveProject")}
-              </button>
-            </div>
-          </div>
-        </div>
+        <ConfirmationDialog
+          title={t("environment.removeProjectTitle").replace("{projectName}", pendingDeleteProject.name)}
+          description={t("environment.removeProjectDescription")}
+          cancelLabel={t("environment.cancelRemoveProject")}
+          confirmLabel={t("environment.confirmRemoveProject")}
+          onCancel={() => setPendingDeleteProject(null)}
+          onConfirm={() => {
+            deleteProject(pendingDeleteProject.id);
+            setPendingDeleteProject(null);
+          }}
+        />
       )}
     </article>
   );

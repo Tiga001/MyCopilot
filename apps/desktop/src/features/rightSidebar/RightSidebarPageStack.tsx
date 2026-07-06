@@ -7,7 +7,7 @@ import type { RightSidebarPage } from "./rightSidebarTypes";
 interface RightSidebarPageStackProps {
   activePageId: string | null;
   pages: RightSidebarPage[];
-  renderPage: (page: RightSidebarPage) => ReactNode;
+  renderPage: (page: RightSidebarPage, isActive: boolean) => ReactNode;
 }
 
 export function RightSidebarPageStack({
@@ -27,7 +27,7 @@ export function RightSidebarPageStack({
             aria-hidden={isActive ? undefined : true}
             key={page.id}
           >
-            {renderPage(page)}
+            {renderPage(page, isActive)}
           </section>
         );
       })}

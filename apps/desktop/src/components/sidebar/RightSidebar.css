@@ -104,6 +104,14 @@
   stroke-width: var(--mc-icon-stroke-regular);
 }
 
+.right-sidebar__tab-favicon {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  border-radius: 4px;
+}
+
 .right-sidebar__tab span {
   min-width: 0;
   overflow: hidden;

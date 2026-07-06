@@ -1,4 +1,5 @@
 mod agent_actions;
+mod browser;
 mod commands;
 mod fs;
 mod git;
@@ -57,6 +58,11 @@ pub fn run() {
             commands::usage::agent_get_usage_summary,
             commands::usage::agent_clear_usage_records,
             commands::system::open_external_url,
+            browser::commands::browser_navigate_url,
+            browser::commands::browser_fetch_page_metadata,
+            browser::commands::browser_reload,
+            browser::commands::browser_go_back,
+            browser::commands::browser_go_forward,
             terminal::commands::terminal_create_session,
             terminal::commands::terminal_write_input,
             terminal::commands::terminal_resize_session,

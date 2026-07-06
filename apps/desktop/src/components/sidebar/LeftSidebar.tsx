@@ -17,9 +17,11 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { FormEvent, PointerEvent as ReactPointerEvent } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 import { useFrontendConfig } from "../../config/FrontendConfigProvider";
 import type { AppProject } from "../../config/projectConfig";
+import { ConfirmationDialog } from "../dialog/ConfirmationDialog";
+import { TextInputDialog } from "../dialog/TextInputDialog";
 import type { ChatConversation } from "../../features/chat/chatTypes";
 import {
   getProfileDisplayName,
@@ -556,8 +558,7 @@ export function LeftSidebar({
     closeProjectMenu();
   };
 
-  const submitRenameProject = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
+  const confirmRenameProject = () => {
     if (!renamingProject) return;
 
     const normalizedName = renameValue.trim();
@@ -573,8 +574,7 @@ export function LeftSidebar({
     setRenamingConversation(conversation);
   };
 
-  const submitRenameConversation = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
+  const confirmRenameConversation = () => {
     if (!renamingConversation) return;
 
     const normalizedTitle = conversationRenameValue.trim();
@@ -1378,229 +1378,83 @@ export function LeftSidebar({
       </div>
 
       {renamingProject && (
-        <div
-          className="left-sidebar__dialog-backdrop"
-          role="presentation"
-          onMouseDown={(event) => {
-            if (event.currentTarget === event.target) setRenamingProject(null);
-          }}
-        >
-          <form className="left-sidebar__dialog" onSubmit={submitRenameProject}>
-            <button
-              className="left-sidebar__dialog-close"
-              type="button"
-              aria-label={t("project.cancel")}
-              onClick={() => setRenamingProject(null)}
-            >
-              <X aria-hidden="true" />
-            </button>
-            <h3>{t("project.renameTitle")}</h3>
-            <p>{t("project.renameDescription")}</p>
-            <input
-              autoFocus
-              value={renameValue}
-              onChange={(event) => setRenameValue(event.target.value)}
-            />
-            <div className="left-sidebar__dialog-actions">
-              <button
-                className="left-sidebar__dialog-button left-sidebar__dialog-button--secondary"
-                type="button"
-                onClick={() => setRenamingProject(null)}
-              >
-                {t("project.cancel")}
-              </button>
-              <button
-                className="left-sidebar__dialog-button left-sidebar__dialog-button--primary"
-                type="submit"
-                disabled={!renameValue.trim()}
-              >
-                {t("project.save")}
-              </button>
-            </div>
-          </form>
-        </div>
+        <TextInputDialog
+          title={t("project.renameTitle")}
+          description={t("project.renameDescription")}
+          value={renameValue}
+          confirmDisabled={!renameValue.trim()}
+          cancelLabel={t("project.cancel")}
+          confirmLabel={t("project.save")}
+          onCancel={() => setRenamingProject(null)}
+          onConfirm={confirmRenameProject}
+          onValueChange={setRenameValue}
+        />
       )}
 
       {renamingConversation && (
-        <div
-          className="left-sidebar__dialog-backdrop"
-          role="presentation"
-          onMouseDown={(event) => {
-            if (event.currentTarget === event.target) setRenamingConversation(null);
-          }}
-        >
-          <form className="left-sidebar__dialog" onSubmit={submitRenameConversation}>
-            <button
-              className="left-sidebar__dialog-close"
-              type="button"
-              aria-label={t("project.cancel")}
-              onClick={() => setRenamingConversation(null)}
-            >
-              <X aria-hidden="true" />
-            </button>
-            <h3>{t("conversation.renameTitle")}</h3>
-            <p>{t("conversation.renameDescription")}</p>
-            <input
-              autoFocus
-              value={conversationRenameValue}
-              onChange={(event) => setConversationRenameValue(event.target.value)}
-            />
-            <div className="left-sidebar__dialog-actions">
-              <button
-                className="left-sidebar__dialog-button left-sidebar__dialog-button--secondary"
-                type="button"
-                onClick={() => setRenamingConversation(null)}
-              >
-                {t("project.cancel")}
-              </button>
-              <button
-                className="left-sidebar__dialog-button left-sidebar__dialog-button--primary"
-                type="submit"
-                disabled={!conversationRenameValue.trim()}
-              >
-                {t("project.save")}
-              </button>
-            </div>
-          </form>
-        </div>
+        <TextInputDialog
+          title={t("conversation.renameTitle")}
+          description={t("conversation.renameDescription")}
+          value={conversationRenameValue}
+          confirmDisabled={!conversationRenameValue.trim()}
+          cancelLabel={t("project.cancel")}
+          confirmLabel={t("project.save")}
+          onCancel={() => setRenamingConversation(null)}
+          onConfirm={confirmRenameConversation}
+          onValueChange={setConversationRenameValue}
+        />
       )}
 
       {pendingBulkArchiveScope && (
-        <div
-          className="left-sidebar__dialog-backdrop"
-          role="presentation"
-          onMouseDown={(event) => {
-            if (event.currentTarget === event.target) setPendingBulkArchiveScope(null);
+        <ConfirmationDialog
+          title={formatTemplate(t("sidebar.archiveAllTitle"), { count: bulkArchiveCount })}
+          description={
+            pendingBulkArchiveScope === "projects"
+              ? t("sidebar.archiveAllProjectsDescription")
+              : t("sidebar.archiveAllRootDescription")
+          }
+          cancelLabel={t("project.cancel")}
+          confirmLabel={t("project.archiveAll")}
+          onCancel={() => setPendingBulkArchiveScope(null)}
+          onConfirm={() => {
+            if (pendingBulkArchiveScope === "projects") {
+              onArchiveAllProjectConversations();
+            } else {
+              onArchiveAllRootConversations();
+            }
+            setPendingBulkArchiveScope(null);
           }}
-        >
-          <div className="left-sidebar__dialog left-sidebar__dialog--confirm" role="dialog" aria-modal="true">
-            <button
-              className="left-sidebar__dialog-close"
-              type="button"
-              aria-label={t("project.cancel")}
-              onClick={() => setPendingBulkArchiveScope(null)}
-            >
-              <X aria-hidden="true" />
-            </button>
-            <h3>{formatTemplate(t("sidebar.archiveAllTitle"), { count: bulkArchiveCount })}</h3>
-            <p>
-              {pendingBulkArchiveScope === "projects"
-                ? t("sidebar.archiveAllProjectsDescription")
-                : t("sidebar.archiveAllRootDescription")}
-            </p>
-            <div className="left-sidebar__dialog-actions">
-              <button
-                className="left-sidebar__dialog-button left-sidebar__dialog-button--secondary"
-                type="button"
-                onClick={() => setPendingBulkArchiveScope(null)}
-              >
-                {t("project.cancel")}
-              </button>
-              <button
-                className="left-sidebar__dialog-button left-sidebar__dialog-button--danger"
-                type="button"
-                onClick={() => {
-                  if (pendingBulkArchiveScope === "projects") {
-                    onArchiveAllProjectConversations();
-                  } else {
-                    onArchiveAllRootConversations();
-                  }
-                  setPendingBulkArchiveScope(null);
-                }}
-              >
-                {t("project.archiveAll")}
-              </button>
-            </div>
-          </div>
-        </div>
+        />
       )}
 
       {pendingArchiveProject && (
-        <div
-          className="left-sidebar__dialog-backdrop"
-          role="presentation"
-          onMouseDown={(event) => {
-            if (event.currentTarget === event.target) setPendingArchiveProject(null);
+        <ConfirmationDialog
+          title={formatTemplate(t("project.archiveTitle"), { count: archiveProjectCount })}
+          description={formatTemplate(t("project.archiveDescription"), {
+            projectName: pendingArchiveProject.name,
+          })}
+          cancelLabel={t("project.cancel")}
+          confirmLabel={t("project.archiveAll")}
+          onCancel={() => setPendingArchiveProject(null)}
+          onConfirm={() => {
+            onArchiveProjectConversations(pendingArchiveProject.id);
+            setPendingArchiveProject(null);
           }}
-        >
-          <div className="left-sidebar__dialog left-sidebar__dialog--confirm" role="dialog" aria-modal="true">
-            <button
-              className="left-sidebar__dialog-close"
-              type="button"
-              aria-label={t("project.cancel")}
-              onClick={() => setPendingArchiveProject(null)}
-            >
-              <X aria-hidden="true" />
-            </button>
-            <h3>{formatTemplate(t("project.archiveTitle"), { count: archiveProjectCount })}</h3>
-            <p>
-              {formatTemplate(t("project.archiveDescription"), {
-                projectName: pendingArchiveProject.name,
-              })}
-            </p>
-            <div className="left-sidebar__dialog-actions">
-              <button
-                className="left-sidebar__dialog-button left-sidebar__dialog-button--secondary"
-                type="button"
-                onClick={() => setPendingArchiveProject(null)}
-              >
-                {t("project.cancel")}
-              </button>
-              <button
-                className="left-sidebar__dialog-button left-sidebar__dialog-button--danger"
-                type="button"
-                onClick={() => {
-                  onArchiveProjectConversations(pendingArchiveProject.id);
-                  setPendingArchiveProject(null);
-                }}
-              >
-                {t("project.archiveAll")}
-              </button>
-            </div>
-          </div>
-        </div>
+        />
       )}
 
       {pendingRemoveProject && (
-        <div
-          className="left-sidebar__dialog-backdrop"
-          role="presentation"
-          onMouseDown={(event) => {
-            if (event.currentTarget === event.target) setPendingRemoveProject(null);
+        <ConfirmationDialog
+          title={formatTemplate(t("project.removeTitle"), { projectName: pendingRemoveProject.name })}
+          description={t("project.removeDescription")}
+          cancelLabel={t("project.cancel")}
+          confirmLabel={t("project.confirmRemove")}
+          onCancel={() => setPendingRemoveProject(null)}
+          onConfirm={() => {
+            onRemoveProject(pendingRemoveProject.id);
+            setPendingRemoveProject(null);
           }}
-        >
-          <div className="left-sidebar__dialog left-sidebar__dialog--confirm" role="dialog" aria-modal="true">
-            <button
-              className="left-sidebar__dialog-close"
-              type="button"
-              aria-label={t("project.cancel")}
-              onClick={() => setPendingRemoveProject(null)}
-            >
-              <X aria-hidden="true" />
-            </button>
-            <h3>{formatTemplate(t("project.removeTitle"), { projectName: pendingRemoveProject.name })}</h3>
-            <p>{t("project.removeDescription")}</p>
-            <div className="left-sidebar__dialog-actions">
-              <button
-                className="left-sidebar__dialog-button left-sidebar__dialog-button--secondary"
-                type="button"
-                onClick={() => setPendingRemoveProject(null)}
-              >
-                {t("project.cancel")}
-              </button>
-              <button
-                className="left-sidebar__dialog-button left-sidebar__dialog-button--danger"
-                type="button"
-                onClick={() => {
-                  onRemoveProject(pendingRemoveProject.id);
-                  setPendingRemoveProject(null);
-                }}
-              >
-                {t("project.confirmRemove")}
-              </button>
-            </div>
-          </div>
-        </div>
+        />
       )}
     </aside>
   );

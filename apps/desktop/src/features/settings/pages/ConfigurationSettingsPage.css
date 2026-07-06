@@ -390,59 +390,6 @@
   padding: 0 14px;
 }
 
-.model-delete-dialog {
-  position: fixed;
-  z-index: 220;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  background: var(--mc-color-overlay-light);
-  backdrop-filter: var(--mc-effect-blur-subtle);
-  -webkit-backdrop-filter: var(--mc-effect-blur-subtle);
-}
-
-.model-delete-dialog__card {
-  width: min(420px, 100%);
-  padding: 20px 22px;
-  background: var(--mc-color-surface-glass-strong);
-  border: 1px solid var(--mc-color-border-subtle);
-  border-radius: var(--mc-radius-card);
-  box-shadow: var(--mc-shadow-popover-large);
-}
-
-.model-delete-dialog h2 {
-  margin: 0;
-  color: var(--settings-content-title-color);
-  font-size: var(--mc-font-size-settings-section-title);
-  font-weight: var(--mc-font-weight-strong);
-  line-height: var(--mc-line-height-control);
-}
-
-.model-delete-dialog p {
-  min-width: 0;
-  margin: 8px 0 0;
-  overflow-wrap: anywhere;
-  color: var(--settings-content-muted-color);
-  font-size: calc(var(--mc-font-size-sidebar-action) - 1px);
-  line-height: var(--mc-line-height-normal);
-}
-
-.model-delete-dialog__actions {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 18px;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.model-delete-dialog__actions .secondary-settings-button,
-.model-delete-dialog__actions .danger-settings-button {
-  min-width: 72px;
-  height: 34px;
-  padding: 0 14px;
-}
-
 .web-search-key-dialog {
   position: fixed;
   z-index: 220;

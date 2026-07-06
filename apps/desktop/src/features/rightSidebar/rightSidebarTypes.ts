@@ -4,7 +4,7 @@
 import type { LucideIcon } from "lucide-react";
 import type { TranslationKey } from "../../config/frontendTranslations";
 
-export type RightSidebarModuleId = "review" | "terminal";
+export type RightSidebarModuleId = "review" | "terminal" | "browser";
 
 export interface RightSidebarModuleDefinition {
   id: RightSidebarModuleId;
@@ -15,6 +15,7 @@ export interface RightSidebarModuleDefinition {
 }
 
 export interface RightSidebarPage {
+  iconUrl?: string | null;
   id: string;
   moduleId: RightSidebarModuleId;
   title: string;

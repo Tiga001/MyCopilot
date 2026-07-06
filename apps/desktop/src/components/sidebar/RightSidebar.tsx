@@ -3,11 +3,12 @@
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Maximize, Minimize2, Plus, X } from "lucide-react";
+import { Maximize, Plus, X } from "lucide-react";
 import { useFrontendConfig } from "../../config/FrontendConfigProvider";
 import { RightSidebarHome } from "../../features/rightSidebar/RightSidebarHome";
 import { RightSidebarModulePicker } from "../../features/rightSidebar/RightSidebarModulePicker";
 import { RightSidebarPageStack } from "../../features/rightSidebar/RightSidebarPageStack";
+import type { BrowserPageMetadata } from "../../features/browser/browserClient";
 import {
   RIGHT_SIDEBAR_MODULES,
   getRightSidebarModule,
@@ -23,6 +24,11 @@ const TerminalPanel = lazy(async () => {
   return { default: module.TerminalPanel };
 });
 
+const BrowserPanel = lazy(async () => {
+  const module = await import("../../features/browser/BrowserPanel");
+  return { default: module.BrowserPanel };
+});
+
 interface RightSidebarProps {
   isMaximized: boolean;
   maximizedToolbarControls?: ReactNode;
@@ -34,6 +40,24 @@ interface RightSidebarProps {
 function createPageId(moduleId: RightSidebarModuleId) {
   const randomValue = Math.random().toString(36).slice(2, 8);
   return `${moduleId}-${Date.now().toString(36)}-${randomValue}`;
+}
+
+function RestoreFromMaximizedIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M10 4v6H4" />
+      <path d="M14 4v6h6" />
+      <path d="M10 20v-6H4" />
+      <path d="M14 20v-6h6" />
+    </svg>
+  );
 }
 
 function getWorkspaceTabTitle(workspacePath: string | undefined, workspaceName: string | null | undefined) {
@@ -136,6 +160,12 @@ export function RightSidebar({
       if (!module?.isEnabled) return;
 
       setPages((currentPages) => {
+        const fallbackTitle =
+          moduleId === "terminal"
+            ? t("terminal.title")
+            : moduleId === "browser"
+              ? t("browser.newTab")
+              : t(module.titleKey);
         const page: RightSidebarPage = {
           id: createPageId(moduleId),
           moduleId,
@@ -144,7 +174,7 @@ export function RightSidebar({
             currentPages,
             workspacePath,
             workspaceName,
-            moduleId === "terminal" ? t("terminal.title") : t(module.titleKey),
+            fallbackTitle,
           ),
           workspaceKey: moduleId === "terminal" ? getWorkspaceKey(workspacePath, workspaceName) : null,
           workspacePath: moduleId === "terminal" ? workspacePath : undefined,
@@ -177,13 +207,42 @@ export function RightSidebar({
     });
   }, []);
 
-  const renderPageContent = (page: RightSidebarPage) => {
+  const updateBrowserPageMetadata = useCallback(
+    (pageId: string, metadata: BrowserPageMetadata) => {
+      setPages((currentPages) =>
+        currentPages.map((page) => {
+          if (page.id !== pageId || page.moduleId !== "browser") return page;
+
+          return {
+            ...page,
+            iconUrl: metadata.iconUrl,
+            title: metadata.title?.trim() || page.title,
+          };
+        }),
+      );
+    },
+    [],
+  );
+
+  const renderPageContent = (page: RightSidebarPage, isActive: boolean) => {
     if (page.moduleId === "terminal") {
       return (
         <Suspense
           fallback={<div className="right-sidebar__panel-loading">{t("terminal.status.starting")}</div>}
         >
           <TerminalPanel initialCwd={page.workspacePath} />
+        </Suspense>
+      );
+    }
+
+    if (page.moduleId === "browser") {
+      return (
+        <Suspense fallback={<div className="right-sidebar__panel-loading">{t("browser.title")}</div>}>
+          <BrowserPanel
+            isActive={isActive}
+            onPageMetadataChange={(metadata) => updateBrowserPageMetadata(page.id, metadata)}
+            pageId={page.id}
+          />
         </Suspense>
       );
     }
@@ -209,6 +268,7 @@ export function RightSidebar({
                 const module = getRightSidebarModule(page.moduleId);
                 const Icon = module?.icon;
                 const isActive = page.id === activePageId;
+                const iconUrl = page.iconUrl?.trim();
 
                 return (
                   <div
@@ -224,7 +284,19 @@ export function RightSidebar({
                       data-active={isActive ? "true" : undefined}
                       onClick={() => setActivePageId(page.id)}
                     >
-                      {Icon && <Icon aria-hidden="true" />}
+                      {iconUrl ? (
+                        <img
+                          className="right-sidebar__tab-favicon"
+                          src={iconUrl}
+                          alt=""
+                          aria-hidden="true"
+                          onError={(event) => {
+                            event.currentTarget.style.display = "none";
+                          }}
+                        />
+                      ) : (
+                        Icon && <Icon aria-hidden="true" />
+                      )}
                       <span>{page.title}</span>
                     </button>
                     <button
@@ -294,7 +366,7 @@ export function RightSidebar({
             onClick={onToggleMaximized}
             title={maximizeLabel}
           >
-            {isMaximized ? <Minimize2 aria-hidden="true" /> : <Maximize aria-hidden="true" />}
+            {isMaximized ? <RestoreFromMaximizedIcon /> : <Maximize aria-hidden="true" />}
           </button>
         </div>
       </header>

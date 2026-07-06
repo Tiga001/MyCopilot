@@ -1,7 +1,7 @@
-// Implements the right-sidebar module integration shell for embedded terminal panels.
+// Implements the right-sidebar module integration shell for right-sidebar embedded tools.
 // Register available right-sidebar modules here instead of coupling them to the shell.
 
-import { ClipboardCheck, TerminalSquare } from "lucide-react";
+import { ClipboardCheck, Globe2, TerminalSquare } from "lucide-react";
 import type { RightSidebarModuleDefinition, RightSidebarModuleId } from "./rightSidebarTypes";
 
 export const RIGHT_SIDEBAR_MODULES: RightSidebarModuleDefinition[] = [
@@ -17,6 +17,13 @@ export const RIGHT_SIDEBAR_MODULES: RightSidebarModuleDefinition[] = [
     titleKey: "rightSidebar.terminal",
     descriptionKey: "rightSidebar.terminalDescription",
     icon: TerminalSquare,
+    isEnabled: true,
+  },
+  {
+    id: "browser",
+    titleKey: "rightSidebar.browser",
+    descriptionKey: "rightSidebar.browserDescription",
+    icon: Globe2,
     isEnabled: true,
   },
 ];

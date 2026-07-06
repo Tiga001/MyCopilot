@@ -1,5 +1,6 @@
 import { Plus } from "lucide-react";
 import { useState } from "react";
+import { ConfirmationDialog } from "../../../../components/dialog/ConfirmationDialog";
 import { useFrontendConfig } from "../../../../config/FrontendConfigProvider";
 import type { ModelConfig } from "./configurationTypes";
 
@@ -71,32 +72,17 @@ export function ModelManager({ models, onBack, onCreate, onDelete, onEdit }: Mod
       </div>
 
       {pendingDeleteModel && (
-        <div
-          className="model-delete-dialog"
-          role="alertdialog"
-          aria-modal="true"
-          aria-labelledby="model-delete-dialog-heading"
-        >
-          <div className="model-delete-dialog__card">
-            <h2 id="model-delete-dialog-heading">{t("configuration.confirmDelete")}</h2>
-            <p>{pendingDeleteModel.displayName}</p>
-            <div className="model-delete-dialog__actions">
-              <button className="secondary-settings-button" type="button" onClick={() => setPendingDeleteId(null)}>
-                {t("configuration.cancel")}
-              </button>
-              <button
-                className="danger-settings-button"
-                type="button"
-                onClick={() => {
-                  onDelete(pendingDeleteModel.id);
-                  setPendingDeleteId(null);
-                }}
-              >
-                {t("configuration.delete")}
-              </button>
-            </div>
-          </div>
-        </div>
+        <ConfirmationDialog
+          title={t("configuration.confirmDelete")}
+          description={pendingDeleteModel.displayName}
+          cancelLabel={t("configuration.cancel")}
+          confirmLabel={t("configuration.delete")}
+          onCancel={() => setPendingDeleteId(null)}
+          onConfirm={() => {
+            onDelete(pendingDeleteModel.id);
+            setPendingDeleteId(null);
+          }}
+        />
       )}
     </section>
   );
