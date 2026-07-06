@@ -22,6 +22,7 @@ import type {
 interface UseTerminalSessionOptions {
   containerRef: RefObject<HTMLDivElement>;
   initialCwd?: string;
+  themeKey?: string;
 }
 
 interface UseTerminalSessionResult {
@@ -30,6 +31,10 @@ interface UseTerminalSessionResult {
   session: TerminalSessionSnapshot | null;
   status: TerminalSessionStatus;
 }
+
+const MIN_TERMINAL_FIT_HEIGHT = 120;
+const MIN_TERMINAL_FIT_WIDTH = 220;
+const TERMINAL_RESIZE_SETTLE_MS = 140;
 
 function formatExitMessage(event: TerminalExitEvent) {
   if (event.signal) {
@@ -82,9 +87,22 @@ function getTerminalTheme() {
   };
 }
 
+function canFitTerminal(container: HTMLElement) {
+  const rect = container.getBoundingClientRect();
+  const style = getComputedStyle(container);
+
+  return (
+    rect.width >= MIN_TERMINAL_FIT_WIDTH &&
+    rect.height >= MIN_TERMINAL_FIT_HEIGHT &&
+    style.display !== "none" &&
+    style.visibility !== "hidden"
+  );
+}
+
 export function useTerminalSession({
   containerRef,
   initialCwd,
+  themeKey,
 }: UseTerminalSessionOptions): UseTerminalSessionResult {
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -94,13 +112,25 @@ export function useTerminalSession({
   const [session, setSession] = useState<TerminalSessionSnapshot | null>(null);
   const [status, setStatus] = useState<TerminalSessionStatus>("starting");
 
+  useEffect(() => {
+    const terminal = terminalRef.current;
+    if (!terminal) return;
+
+    terminal.options.theme = getTerminalTheme();
+  }, [themeKey]);
+
   const fitTerminal = useCallback(() => {
     const terminal = terminalRef.current;
     const fitAddon = fitAddonRef.current;
-    if (!terminal || !fitAddon) return;
+    const container = containerRef.current;
+    if (!terminal || !fitAddon || !container || !canFitTerminal(container)) return;
 
     try {
+      const previousCols = terminal.cols;
+      const previousRows = terminal.rows;
       fitAddon.fit();
+      if (terminal.cols === previousCols && terminal.rows === previousRows) return;
+
       const sessionId = sessionIdRef.current;
       if (sessionId) {
         void resizeTerminalSession(sessionId, terminal.cols, terminal.rows).catch((error) => {
@@ -110,7 +140,7 @@ export function useTerminalSession({
     } catch (error) {
       console.error("Failed to fit embedded terminal", error);
     }
-  }, []);
+  }, [containerRef]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -118,6 +148,7 @@ export function useTerminalSession({
 
     let isDisposed = false;
     let resizeFrame = 0;
+    let resizeSettleTimer = 0;
     const terminal = new Terminal({
       allowProposedApi: false,
       convertEol: false,
@@ -136,9 +167,13 @@ export function useTerminalSession({
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
 
-    const queueFit = () => {
+    const runQueuedFit = () => {
       window.cancelAnimationFrame(resizeFrame);
       resizeFrame = window.requestAnimationFrame(fitTerminal);
+    };
+    const queueFit = () => {
+      window.clearTimeout(resizeSettleTimer);
+      resizeSettleTimer = window.setTimeout(runQueuedFit, TERMINAL_RESIZE_SETTLE_MS);
     };
 
     const resizeObserver = new ResizeObserver(queueFit);
@@ -161,7 +196,9 @@ export function useTerminalSession({
       sessionIdRef.current = requestedSessionId;
 
       try {
-        fitAddon.fit();
+        if (canFitTerminal(container)) {
+          fitAddon.fit();
+        }
         const nextSession = await createTerminalSession({
           cols: terminal.cols,
           cwd: initialCwdRef.current,
@@ -226,6 +263,7 @@ export function useTerminalSession({
     return () => {
       isDisposed = true;
       window.cancelAnimationFrame(resizeFrame);
+      window.clearTimeout(resizeSettleTimer);
       resizeObserver.disconnect();
       inputSubscription.dispose();
       unlistenOutput?.();

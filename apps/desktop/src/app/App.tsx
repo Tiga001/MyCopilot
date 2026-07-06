@@ -292,6 +292,8 @@ export function App() {
   const [rightWidth, setRightWidth] = useState(RIGHT_DEFAULT_WIDTH);
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
+  const [rightMaximized, setRightMaximized] = useState(false);
+  const isRightMaximized = rightMaximized;
 
   useEffect(() => {
     activeConversationIdRef.current = activeConversationId;
@@ -425,6 +427,10 @@ export function App() {
     const nextRightOpen = !rightOpen;
     applyConstrainedLayout(leftOpen, nextRightOpen, nextRightOpen ? "right" : undefined);
   }, [applyConstrainedLayout, leftOpen, rightOpen]);
+
+  const toggleRightSidebarMaximized = useCallback(() => {
+    setRightMaximized((current) => !current);
+  }, []);
 
   useEffect(() => {
     const keepCenterVisible = () => {
@@ -1765,145 +1771,174 @@ export function App() {
     [activeConversationId, updateAssistantMessage],
   );
 
-  if (view === "settings") {
-    return (
-      <SettingsPage
-        conversations={conversations}
-        projects={projects}
-        initialPage={settingsInitialPage}
-        onBack={() => setView("workspace")}
-        onDeleteAllArchivedConversations={deleteArchivedConversations}
-        onDeleteConversation={deleteConversation}
-        onUnarchiveConversation={unarchiveConversation}
-        onUiPreferencesChange={updateUiPreferences}
-        uiPreferences={uiPreferences}
-      />
-    );
-  }
-
   return (
-    <div
-      ref={shellRef}
-      className="app-shell"
-      data-left-open={leftOpen}
-      data-native-font-smoothing={
-        SUPPORTS_NATIVE_FONT_SMOOTHING && uiPreferences.nativeFontSmoothing ? "true" : undefined
-      }
-      data-right-open={rightOpen}
-      data-translucent-sidebar={uiPreferences.translucentSidebar || undefined}
-      style={{
-        "--left-panel-width": `${leftOpen ? leftWidth : 0}px`,
-        "--right-panel-width": `${rightOpen ? rightWidth : 0}px`,
-      } as React.CSSProperties}
-    >
-      <header className="window-toolbar" data-tauri-drag-region />
+    <>
+      <div
+        ref={shellRef}
+        className="app-shell"
+        data-left-open={leftOpen}
+        data-native-font-smoothing={
+          SUPPORTS_NATIVE_FONT_SMOOTHING && uiPreferences.nativeFontSmoothing ? "true" : undefined
+        }
+        data-right-open={rightOpen}
+        data-right-maximized={isRightMaximized ? "true" : undefined}
+        data-translucent-sidebar={uiPreferences.translucentSidebar || undefined}
+        style={{
+          "--left-panel-width": `${leftOpen ? leftWidth : 0}px`,
+          "--right-panel-width": `${rightOpen ? rightWidth : 0}px`,
+        } as React.CSSProperties}
+      >
+        <header className="window-toolbar" data-tauri-drag-region />
 
-      <div className="side-panel side-panel--left">
-        <LeftSidebar
-          activeConversationId={activeConversationId}
+        <div className="side-panel side-panel--left">
+          <LeftSidebar
+            activeConversationId={activeConversationId}
+            conversations={conversations}
+            projects={projects}
+            uiPreferences={uiPreferences}
+            onArchiveAllProjectConversations={archiveAllProjectConversations}
+            onArchiveAllRootConversations={archiveAllRootConversations}
+            onArchiveConversation={archiveConversation}
+            onArchiveProjectConversations={archiveProjectConversations}
+            onMarkConversationUnread={markConversationUnread}
+            onNewConversation={startNewConversation}
+            onOpenSettings={(page: SettingsPageId = "general") => {
+              setSettingsInitialPage(page);
+              setView("settings");
+            }}
+            onRemoveProject={deleteProject}
+            onRenameConversation={renameConversation}
+            onRenameProject={renameProject}
+            onShowProjectInFolder={handleShowProjectInFolder}
+            onSelectConversation={selectConversation}
+            onTogglePinConversation={togglePinConversation}
+            onTogglePinProject={togglePinProject}
+            onUiPreferencesChange={updateUiPreferences}
+          />
+        </div>
+
+        {leftOpen && (
+          <ResizeHandle
+            side="left"
+            onResize={(deltaX) => resizeSide("left", deltaX)}
+          />
+        )}
+
+        <main className="main-panel" aria-label={t("app.mainWorkspace")}>
+          <div className="main-panel__toolbar" data-tauri-drag-region>
+            <button
+              className="panel-toggle panel-toggle--left"
+              data-has-unread={!leftOpen && hasUnreadConversations ? "true" : undefined}
+              type="button"
+              aria-label={leftOpen ? t("app.collapseLeftSidebar") : t("app.expandLeftSidebar")}
+              aria-pressed={leftOpen}
+              onClick={toggleLeftSidebar}
+            >
+              <SidebarToggleIcon open={leftOpen} side="left" />
+            </button>
+
+            <button
+              className="panel-toggle panel-toggle--right"
+              type="button"
+              aria-label={rightOpen ? t("app.collapseRightSidebar") : t("app.expandRightSidebar")}
+              aria-pressed={rightOpen}
+              onClick={toggleRightSidebar}
+            >
+              <SidebarToggleIcon open={rightOpen} side="right" />
+            </button>
+
+            {toolbarTitle && <h1 className="main-panel__title">{toolbarTitle}</h1>}
+          </div>
+          <div className="main-panel__surface">
+            {workspaceView === "newConversation" && (
+              <NewConversationPage
+                defaultProjectId={newConversationProjectId}
+                draft={newConversationDraft}
+                onDraftChange={(draft) => updateComposerDraft(NEW_CONVERSATION_DRAFT_ID, draft)}
+                onSubmitMessage={createConversationFromMessage}
+                permissionModeAvailability={{
+                  custom: uiPreferences.customPermissionEnabled,
+                  full: uiPreferences.fullPermissionEnabled,
+                }}
+              />
+            )}
+            {workspaceView === "conversation" && activeConversation && activeConversationDraft && (
+              <ChatConversationPage
+                composerDraft={activeConversationDraft}
+                conversation={activeConversation}
+                onApproveAgentAction={handleApproveAgentAction}
+                onCancelAgentAction={handleCancelAgentAction}
+                onComposerDraftChange={(draft) => updateComposerDraft(activeConversation.id, draft)}
+                onRejectAgentAction={handleRejectAgentAction}
+                onMessageUiStateChange={updateMessageUiState}
+                onStopGenerating={stopActiveGeneration}
+                onSubmitMessage={appendMessageToActiveConversation}
+                permissionModeAvailability={{
+                  custom: uiPreferences.customPermissionEnabled,
+                  full: uiPreferences.fullPermissionEnabled,
+                }}
+                showTokenUsageDetails={uiPreferences.showTokenUsageDetails}
+              />
+            )}
+          </div>
+        </main>
+
+        {rightOpen && !isRightMaximized && (
+          <ResizeHandle
+            side="right"
+            onResize={(deltaX) => resizeSide("right", deltaX)}
+          />
+        )}
+
+        <div className="side-panel side-panel--right">
+          <RightSidebar
+            isMaximized={isRightMaximized}
+            maximizedToolbarControls={
+              isRightMaximized ? (
+                <>
+                  <button
+                    className="right-sidebar__icon-button"
+                    type="button"
+                    aria-label={leftOpen ? t("app.collapseLeftSidebar") : t("app.expandLeftSidebar")}
+                    aria-pressed={leftOpen}
+                    onClick={toggleLeftSidebar}
+                    title={leftOpen ? t("app.collapseLeftSidebar") : t("app.expandLeftSidebar")}
+                  >
+                    <SidebarToggleIcon open={leftOpen} side="left" />
+                  </button>
+                  <button
+                    className="right-sidebar__icon-button"
+                    type="button"
+                    aria-label={rightOpen ? t("app.collapseRightSidebar") : t("app.expandRightSidebar")}
+                    aria-pressed={rightOpen}
+                    onClick={toggleRightSidebar}
+                    title={rightOpen ? t("app.collapseRightSidebar") : t("app.expandRightSidebar")}
+                  >
+                    <SidebarToggleIcon open={rightOpen} side="right" />
+                  </button>
+                </>
+              ) : null
+            }
+            onToggleMaximized={toggleRightSidebarMaximized}
+            workspaceName={activeWorkspaceProject?.name ?? null}
+            workspacePath={activeWorkspaceProject?.path}
+          />
+        </div>
+      </div>
+
+      {view === "settings" && (
+        <SettingsPage
           conversations={conversations}
           projects={projects}
-          uiPreferences={uiPreferences}
-          onArchiveAllProjectConversations={archiveAllProjectConversations}
-          onArchiveAllRootConversations={archiveAllRootConversations}
-          onArchiveConversation={archiveConversation}
-          onArchiveProjectConversations={archiveProjectConversations}
-          onMarkConversationUnread={markConversationUnread}
-          onNewConversation={startNewConversation}
-          onOpenSettings={(page: SettingsPageId = "general") => {
-            setSettingsInitialPage(page);
-            setView("settings");
-          }}
-          onRemoveProject={deleteProject}
-          onRenameConversation={renameConversation}
-          onRenameProject={renameProject}
-          onShowProjectInFolder={handleShowProjectInFolder}
-          onSelectConversation={selectConversation}
-          onTogglePinConversation={togglePinConversation}
-          onTogglePinProject={togglePinProject}
+          initialPage={settingsInitialPage}
+          onBack={() => setView("workspace")}
+          onDeleteAllArchivedConversations={deleteArchivedConversations}
+          onDeleteConversation={deleteConversation}
+          onUnarchiveConversation={unarchiveConversation}
           onUiPreferencesChange={updateUiPreferences}
-        />
-      </div>
-
-      {leftOpen && (
-        <ResizeHandle
-          side="left"
-          onResize={(deltaX) => resizeSide("left", deltaX)}
+          uiPreferences={uiPreferences}
         />
       )}
-
-      <main className="main-panel" aria-label={t("app.mainWorkspace")}>
-        <div className="main-panel__toolbar" data-tauri-drag-region>
-          <button
-            className="panel-toggle panel-toggle--left"
-            data-has-unread={!leftOpen && hasUnreadConversations ? "true" : undefined}
-            type="button"
-            aria-label={leftOpen ? t("app.collapseLeftSidebar") : t("app.expandLeftSidebar")}
-            aria-pressed={leftOpen}
-            onClick={toggleLeftSidebar}
-          >
-            <SidebarToggleIcon open={leftOpen} side="left" />
-          </button>
-
-          <button
-            className="panel-toggle panel-toggle--right"
-            type="button"
-            aria-label={rightOpen ? t("app.collapseRightSidebar") : t("app.expandRightSidebar")}
-            aria-pressed={rightOpen}
-            onClick={toggleRightSidebar}
-          >
-            <SidebarToggleIcon open={rightOpen} side="right" />
-          </button>
-
-          {toolbarTitle && <h1 className="main-panel__title">{toolbarTitle}</h1>}
-        </div>
-        <div className="main-panel__surface">
-          {workspaceView === "newConversation" && (
-            <NewConversationPage
-              defaultProjectId={newConversationProjectId}
-              draft={newConversationDraft}
-              onDraftChange={(draft) => updateComposerDraft(NEW_CONVERSATION_DRAFT_ID, draft)}
-              onSubmitMessage={createConversationFromMessage}
-              permissionModeAvailability={{
-                custom: uiPreferences.customPermissionEnabled,
-                full: uiPreferences.fullPermissionEnabled,
-              }}
-            />
-          )}
-          {workspaceView === "conversation" && activeConversation && activeConversationDraft && (
-            <ChatConversationPage
-              composerDraft={activeConversationDraft}
-              conversation={activeConversation}
-              onApproveAgentAction={handleApproveAgentAction}
-              onCancelAgentAction={handleCancelAgentAction}
-              onComposerDraftChange={(draft) => updateComposerDraft(activeConversation.id, draft)}
-              onRejectAgentAction={handleRejectAgentAction}
-              onMessageUiStateChange={updateMessageUiState}
-              onStopGenerating={stopActiveGeneration}
-              onSubmitMessage={appendMessageToActiveConversation}
-              permissionModeAvailability={{
-                custom: uiPreferences.customPermissionEnabled,
-                full: uiPreferences.fullPermissionEnabled,
-              }}
-              showTokenUsageDetails={uiPreferences.showTokenUsageDetails}
-            />
-          )}
-        </div>
-      </main>
-
-      {rightOpen && (
-        <ResizeHandle
-          side="right"
-          onResize={(deltaX) => resizeSide("right", deltaX)}
-        />
-      )}
-
-      <div className="side-panel side-panel--right">
-        <RightSidebar
-          workspaceName={activeWorkspaceProject?.name ?? null}
-          workspacePath={activeWorkspaceProject?.path}
-        />
-      </div>
-    </div>
+    </>
   );
 }

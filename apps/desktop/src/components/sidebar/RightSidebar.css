@@ -21,9 +21,18 @@
   -webkit-app-region: drag;
 }
 
+.right-sidebar--maximized .right-sidebar__toolbar {
+  gap: 8px;
+}
+
 .right-sidebar__toolbar--home {
-  padding: 0;
   border-bottom: 0;
+}
+
+.right-sidebar__toolbar-spacer {
+  min-width: 0;
+  height: 100%;
+  -webkit-app-region: drag;
 }
 
 .right-sidebar__tab-scroll {
@@ -45,6 +54,10 @@
   align-items: center;
   gap: 7px;
   -webkit-app-region: no-drag;
+}
+
+.right-sidebar--maximized .right-sidebar__tab-scroll {
+  padding-right: 2px;
 }
 
 .right-sidebar__tab-shell {
@@ -193,10 +206,16 @@
 
 .right-sidebar__toolbar-actions {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 8px;
   justify-self: end;
   -webkit-app-region: no-drag;
+}
+
+.right-sidebar--maximized .right-sidebar__toolbar-actions {
+  gap: 6px;
+  padding-left: 4px;
 }
 
 .right-sidebar__module-menu {

@@ -123,9 +123,43 @@ button {
 }
 
 .side-panel--right {
-  z-index: 30;
+  position: absolute;
+  z-index: 45;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: var(--right-panel-width);
   background: var(--right-panel);
   border-left: 1px solid var(--hairline);
+  transition:
+    width 180ms ease,
+    opacity 120ms ease,
+    visibility 0ms linear 120ms,
+    border-color 120ms ease;
+}
+
+.app-shell[data-right-maximized="true"] .side-panel--right {
+  width: calc(100% - var(--left-panel-width));
+  visibility: visible;
+  opacity: 1;
+  transition:
+    width 180ms ease,
+    opacity 120ms ease,
+    visibility 0ms,
+    border-color 120ms ease;
+}
+
+.app-shell[data-right-maximized="true"][data-left-open="false"] .side-panel--right {
+  border-left: 0;
+}
+
+.app-shell[data-right-open="false"] .side-panel--right {
+  width: 0;
+  transition:
+    width 180ms ease,
+    opacity 120ms ease,
+    visibility 0ms linear 180ms,
+    border-color 120ms ease;
 }
 
 .app-shell[data-left-open="false"] .side-panel--left,
