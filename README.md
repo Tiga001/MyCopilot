@@ -1,6 +1,7 @@
 # MyCopilot
 
 这堆代码是tauri+rust框架，Captain Who的前身。
+https://github.com/Tiga001/Captain_Who
 
 ## Current status
 
